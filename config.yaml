@@ -1,0 +1,53 @@
+# config.yaml – BB‑Auto Configuration
+# Use environment variables for sensitive keys (e.g., ${OPENAI_API_KEY})
+
+llm:
+  openai_api_key: "${OPENAI_API_KEY}"
+  anthropic_api_key: "${ANTHROPIC_API_KEY}"
+  google_api_key: "${GOOGLE_API_KEY}"
+  deepseek_api_key: "${DEEPSEEK_API_KEY}"
+  default_model: "gpt-4"
+  temperature: 0.2
+
+agents:
+  planner:
+    enabled: true
+    model: "gpt-4"
+    temperature: 0.3
+  recon:
+    enabled: true
+    model: "gpt-3.5-turbo"
+    temperature: 0.1
+  exploit:
+    enabled: true
+    model: "gpt-4"
+    temperature: 0.2
+  reporter:
+    enabled: true
+    model: "gpt-4"
+    temperature: 0.0
+
+sandbox:
+  enabled: true
+  image: "bb-sandbox"
+  network: "none"               # Options: none, bridge, host
+  memory_limit: "2g"
+  cpu_limit: 1.0
+  ephemeral: true                # Destroy container after each use
+
+scan:
+  mode: "deep"                   # quick / deep / stealth
+  threads: 50
+  rate_limit: 100                 # requests per second
+  timeout: 30                     # seconds per tool
+
+reporting:
+  formats: ["markdown", "json", "csv"]
+  output_dir: "runs"
+  include_poc: true
+  include_screenshots: true
+
+ci:
+  exit_codes: true
+  slack_webhook: "${SLACK_WEBHOOK_URL}"
+  github_token: "${GITHUB_TOKEN}"
