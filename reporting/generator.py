@@ -1,125 +1,131 @@
 import json
 import csv
 from pathlib import Path
-from jinja2 import Template
+from jinja2 import Environment, BaseLoader
 from datetime import datetime
 import logging
 
 
+_MARKDOWN_TEMPLATE = """\
+# Security Scan Report
+
+**Date:** {{ date }}
+**Target:** {{ target }}
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| 🔴 Critical | {{ critical_count }} |
+| 🟠 High | {{ high_count }} |
+| 🟡 Medium | {{ medium_count }} |
+| 🟢 Low | {{ low_count }} |
+| ℹ️ Info | {{ info_count }} |
+| **Total** | **{{ findings|length }}** |
+
+## Findings
+
+{% for f in findings %}
+---
+
+### {{ loop.index }}. {{ f.title }}
+
+- **Severity:** {{ f.severity | upper }}
+- **Location:** {{ f.location }}
+- **Validated:** {{ "✅ Yes" if f.get("validated") else "⚠️ Unvalidated" }}
+
+**Description:**
+{{ f.description }}
+
+{% if f.payload %}
+**Payload:** `{{ f.payload }}`
+{% endif %}
+
+{% if f.poc %}
+**Proof of Concept:**
+```{{ f.poc_lang if f.poc_lang else "text" }}
+{{ f.poc }}
+```
+{% endif %}
+{% endfor %}
+"""
+
+
 class ReportGenerator:
-    def __init__(self, config, workspace):
+    def __init__(self, config, workspace, target: str = "Unknown"):
         self.config = config
         self.workspace = Path(workspace)
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.target = target  # Now passed directly — no longer reads from config (was always "Unknown")
         self.logger = logging.getLogger(__name__)
 
     def generate(self, findings):
         report_paths = {}
-
         formats = self.config.get("reporting", {}).get("formats", [])
 
         if "markdown" in formats:
             report_paths["markdown"] = self._generate_markdown(findings)
-
         if "json" in formats:
             report_paths["json"] = self._generate_json(findings)
-
         if "csv" in formats:
             report_paths["csv"] = self._generate_csv(findings)
 
         return report_paths
 
+    def _count(self, findings, severity):
+        return sum(1 for f in findings if f.get("severity", "").lower() == severity)
+
     def _generate_markdown(self, findings):
-        template_str = """
-# Security Scan Report
-**Date:** {{ date }}
-**Target:** {{ target }}
-
-## Summary
-- Total vulnerabilities: {{ findings|length }}
-- Critical: {{ critical_count }}
-- High: {{ high_count }}
-- Medium: {{ medium_count }}
-- Low: {{ low_count }}
-
-## Details
-{% for f in findings %}
-### {{ f.title }}
-- **Severity:** {{ f.severity }}
-- **Location:** {{ f.location }}
-- **Description:** {{ f.description }}
-- **PoC:**
-```{{ f.poc_lang }}
-{{ f.poc }}
-```
-{% endfor %}
-"""
-
-        template = Template(template_str)
-
-        critical_count = sum(
-            1 for f in findings if f.get("severity", "").lower() == "critical"
-        )
-        high_count = sum(
-            1 for f in findings if f.get("severity", "").lower() == "high"
-        )
-        medium_count = sum(
-            1 for f in findings if f.get("severity", "").lower() == "medium"
-        )
-        low_count = sum(
-            1 for f in findings if f.get("severity", "").lower() == "low"
-        )
+        env = Environment(loader=BaseLoader())
+        template = env.from_string(_MARKDOWN_TEMPLATE)
 
         output = template.render(
             date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            target=self.config.get("target", "Unknown"),
+            target=self.target,
             findings=findings,
-            critical_count=critical_count,
-            high_count=high_count,
-            medium_count=medium_count,
-            low_count=low_count,
+            critical_count=self._count(findings, "critical"),
+            high_count=self._count(findings, "high"),
+            medium_count=self._count(findings, "medium"),
+            low_count=self._count(findings, "low"),
+            info_count=self._count(findings, "info"),
         )
 
         report_path = self.workspace / "report.md"
         report_path.write_text(output, encoding="utf-8")
-
-        self.logger.info(f"Markdown report generated at {report_path}")
+        self.logger.info(f"Markdown report saved → {report_path}")
         return str(report_path)
 
     def _generate_json(self, findings):
         report_data = {
             "date": datetime.now().isoformat(),
-            "target": self.config.get("target", "Unknown"),
+            "target": self.target,
             "total_findings": len(findings),
+            "summary": {
+                "critical": self._count(findings, "critical"),
+                "high": self._count(findings, "high"),
+                "medium": self._count(findings, "medium"),
+                "low": self._count(findings, "low"),
+                "info": self._count(findings, "info"),
+            },
             "findings": findings,
         }
 
         report_path = self.workspace / "report.json"
-
         with report_path.open("w", encoding="utf-8") as f:
-            json.dump(report_data, f, indent=4)
+            json.dump(report_data, f, indent=4, default=str)
 
-        self.logger.info(f"JSON report generated at {report_path}")
+        self.logger.info(f"JSON report saved → {report_path}")
         return str(report_path)
 
     def _generate_csv(self, findings):
         report_path = self.workspace / "report.csv"
-
-        fieldnames = ["title", "severity", "location", "description", "poc_lang", "poc"]
+        fieldnames = ["title", "severity", "location", "description", "payload", "poc_lang", "poc", "validated"]
 
         with report_path.open("w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
-
             for finding in findings:
-                writer.writerow({
-                    "title": finding.get("title", ""),
-                    "severity": finding.get("severity", ""),
-                    "location": finding.get("location", ""),
-                    "description": finding.get("description", ""),
-                    "poc_lang": finding.get("poc_lang", ""),
-                    "poc": finding.get("poc", ""),
-                })
+                writer.writerow({k: finding.get(k, "") for k in fieldnames})
 
-        self.logger.info(f"CSV report generated at {report_path}")
+        self.logger.info(f"CSV report saved → {report_path}")
         return str(report_path)

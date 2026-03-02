@@ -1,18 +1,31 @@
-crewai
-langchain
-openai
-anthropic
-google-generativeai
-deepseek
-pyyaml
-docker
-requests
-fastapi
-uvicorn
-playwright
-jinja2
-pandas
-pydantic
-python-wappalyzer
-lxml
-beautifulsoup4
+# BBH-AI Python Dependencies
+# All versions pinned for reproducible installs.
+# Update with: pip install -r requirements.txt
+
+# ── AI / Agent Framework ─────────────────────────────────────────────────────
+crewai>=0.28.0,<1.0.0
+langchain>=0.1.0,<0.3.0
+openai>=1.14.0,<2.0.0          # Used for OpenAI AND DeepSeek (OpenAI-compatible API)
+anthropic>=0.23.0,<1.0.0
+google-generativeai>=0.5.0,<1.0.0
+
+# ── Config & Runtime ─────────────────────────────────────────────────────────
+pyyaml>=6.0.1,<7.0.0
+pydantic>=2.0.0,<3.0.0
+
+# ── Sandbox / Container ───────────────────────────────────────────────────────
+docker>=7.0.0,<8.0.0
+fastapi>=0.110.0,<1.0.0
+uvicorn[standard]>=0.29.0,<1.0.0
+
+# ── HTTP / Scraping ───────────────────────────────────────────────────────────
+requests>=2.31.0,<3.0.0
+urllib3>=2.0.0,<3.0.0
+
+# ── Reporting ─────────────────────────────────────────────────────────────────
+jinja2>=3.1.3,<4.0.0
+
+# ── Technology Detection ──────────────────────────────────────────────────────
+python-wappalyzer>=0.3.1,<1.0.0
+lxml>=5.1.0,<6.0.0
+beautifulsoup4>=4.12.0,<5.0.0

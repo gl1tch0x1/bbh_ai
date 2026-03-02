@@ -2,34 +2,69 @@ import importlib
 import logging
 from pathlib import Path
 
+
 class ToolRegistry:
+    """
+    Dynamically loads all tool wrappers from tools/wrappers/.
+    Supports category-based filtering via a 'categories' attribute on each tool class.
+    """
+
     def __init__(self, config, workspace, telemetry):
         self.config = config
         self.workspace = workspace
         self.telemetry = telemetry
         self.logger = logging.getLogger(__name__)
-        self.tools = {}
+        self.tools: dict = {}
         self._load_tools()
 
     def _load_tools(self):
         wrappers_dir = Path(__file__).parent / "wrappers"
-        for pyfile in wrappers_dir.glob("*.py"):
+        for pyfile in sorted(wrappers_dir.glob("*.py")):
             if pyfile.name.startswith("__"):
                 continue
             module_name = pyfile.stem
-            class_name = module_name.title().replace('_', '') + "Tool"
+            # e.g. "js_parser" → "JsParserTool"
+            class_name = "".join(part.capitalize() for part in module_name.split("_")) + "Tool"
             try:
                 module = importlib.import_module(f"tools.wrappers.{module_name}")
                 tool_class = getattr(module, class_name)
                 instance = tool_class(self.config, self.workspace, self.telemetry)
                 self.tools[module_name] = instance
-                self.logger.debug(f"Loaded tool: {module_name}")
+                self.logger.debug(f"Loaded tool: {module_name} (class: {class_name})")
+            except AttributeError:
+                self.logger.error(
+                    f"Tool class '{class_name}' not found in tools/wrappers/{module_name}.py"
+                )
             except Exception as e:
-                self.logger.error(f"Failed to load tool {module_name}: {e}")
+                self.logger.error(f"Failed to load tool '{module_name}': {e}")
 
-    def get_tool(self, name):
+    def get_tool(self, name: str):
+        """Return a single tool by name, or None if not found."""
         return self.tools.get(name)
 
-    def get_tools(self, category):
-        # For now, return all tools; can be filtered by category later
-        return list(self.tools.values())
+    def get_tools(self, category: str) -> list:
+        """
+        Return tools belonging to a given category.
+        Falls back to ALL tools if category is '*' or no tools declare the category.
+        Each tool class must declare a 'categories' list attribute.
+        """
+        if category == '*':
+            return list(self.tools.values())
+
+        filtered = [
+            t for t in self.tools.values()
+            if category in getattr(t, 'categories', [])
+        ]
+
+        if not filtered:
+            self.logger.warning(
+                f"No tools found for category '{category}'. "
+                f"Returning all tools as fallback."
+            )
+            return list(self.tools.values())
+
+        return filtered
+
+    def list_tools(self) -> list[str]:
+        """Return sorted list of all loaded tool names."""
+        return sorted(self.tools.keys())

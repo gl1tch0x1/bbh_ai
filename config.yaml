@@ -1,53 +1,56 @@
-# config.yaml – BBH‑AI Configuration
-# Use environment variables for sensitive keys (e.g., ${OPENAI_API_KEY})
+# config.yaml – BBH-AI Configuration
+# Sensitive values must be set as environment variables.
+# Run: export OPENAI_API_KEY=sk-... etc. before launching.
 
 llm:
-  openai_api_key: "${OPENAI_API_KEY}"
+  openai_api_key:    "${OPENAI_API_KEY}"
   anthropic_api_key: "${ANTHROPIC_API_KEY}"
-  google_api_key: "${GOOGLE_API_KEY}"
-  deepseek_api_key: "${DEEPSEEK_API_KEY}"
-  default_model: "gpt-4"
-  temperature: 0.2
+  google_api_key:    "${GOOGLE_API_KEY}"
+  deepseek_api_key:  "${DEEPSEEK_API_KEY}"   # Uses OpenAI-compatible endpoint
+  default_model:     "gpt-4"
+  temperature:       0.2
 
 agents:
   planner:
-    enabled: true
-    model: "gpt-4"
+    enabled:     true
+    model:       "gpt-4"
     temperature: 0.3
   recon:
-    enabled: true
-    model: "gpt-3.5-turbo"
+    enabled:     true
+    model:       "gpt-3.5-turbo"
     temperature: 0.1
   exploit:
-    enabled: true
-    model: "gpt-4"
+    enabled:     true
+    model:       "gpt-4"
     temperature: 0.2
   reporter:
-    enabled: true
-    model: "gpt-4"
+    enabled:     true
+    model:       "gpt-4"
     temperature: 0.0
 
 sandbox:
-  enabled: true
-  image: "bb-sandbox"
-  network: "none"               # Options: none, bridge, host
-  memory_limit: "2g"
-  cpu_limit: 1.0
-  ephemeral: true                # Destroy container after each use
+  enabled:       true
+  image:         "bb-sandbox"
+  network:       "none"        # Options: none, bridge, host
+  memory_limit:  "2g"
+  cpu_limit:     1.0
+  ephemeral:     true          # Destroy container after use
 
 scan:
-  mode: "deep"                   # quick / deep / stealth
-  threads: 50
-  rate_limit: 100                 # requests per second
-  timeout: 30                     # seconds per tool
+  mode:          "deep"        # quick / deep / stealth
+  threads:       50            # Parallel tool threads (future use)
+  rate_limit:    10            # Max tool invocations per second (0 = unlimited)
+  timeout:       60            # Seconds per tool call (used by all wrappers)
+  js_file_limit: 20            # Max JS files to parse per scan
 
 reporting:
-  formats: ["markdown", "json", "csv"]
-  output_dir: "runs"
-  include_poc: true
-  include_screenshots: true
+  formats:            ["markdown", "json", "csv"]
+  output_dir:         "runs"
+  include_poc:        true
+  include_screenshots: false   # Set true when screenshot tools are available
 
 ci:
-  exit_codes: true
+  enabled:       false
+  exit_codes:    true           # Exit 1=critical, 2=high, 0=clean
   slack_webhook: "${SLACK_WEBHOOK_URL}"
-  github_token: "${GITHUB_TOKEN}"
+  github_token:  "${GITHUB_TOKEN}"
