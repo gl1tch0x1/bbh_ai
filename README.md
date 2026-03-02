@@ -1,6 +1,6 @@
 # BB-Auto: Multi-Agent AI-Orchestrated Security Testing Engine
 
-BB-Auto is an advanced bug bounty automation framework that uses multiple AI agents to plan, execute, and validate security tests. It integrates industry-standard tools, runs exploits in isolated Docker sandboxes, and generates comprehensive reports suitable for CI/CD pipelines.
+bbh-ai is an advanced bug bounty automation framework that uses multiple AI agents to plan, execute, and validate security tests. It integrates industry-standard tools, runs exploits in isolated Docker sandboxes, and generates comprehensive reports suitable for CI/CD pipelines.
 
 ## Features
 
@@ -18,8 +18,8 @@ BB-Auto is an advanced bug bounty automation framework that uses multiple AI age
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/bb-auto.git
-   cd bb-auto
+   git clone git clone https://github.com/gl1tch0x1/bbh_ai.git
+   cd bbh-ai
 
 **Run the installer as root:**
 ```bash
