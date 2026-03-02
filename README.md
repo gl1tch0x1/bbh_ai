@@ -49,18 +49,28 @@ graph TB
     PREP --> TOOLS
     RUN --> AGENTS
 
-    subgraph TOOLS["🧰 Tool Registry (Auto-loaded)"]
+    subgraph TOOLS["🧰 Tool Registry (Categorized)"]
         direction LR
-        SF["subfinder"]
-        HX["httpx"]
-        GAU["gau"]
-        KAT["katana"]
-        GS["gospider"]
-        NC["nuclei"]
-        DF["dalfox"]
-        WM["waymore"]
-        JS["js_parser"]
-        TD["tech_detect"]
+        subgraph SUB["Subdomains"]
+            SF["subfinder"]
+        end
+        subgraph HST["Hosts"]
+            HX["httpx"]
+        end
+        subgraph OSN["OSINT"]
+            GAU["gau"]
+            WM["waymore"]
+        end
+        subgraph WEB["Web Analysis"]
+            GS["gospider"]
+            JS["js_parser"]
+            KAT["katana"]
+            TD["tech_detect"]
+        end
+        subgraph VLN["Vuln Checkers"]
+            NC["nuclei"]
+            DF["dalfox"]
+        end
     end
 
     subgraph AGENTS["🤖 CrewAI Agent Pipeline"]
@@ -224,6 +234,9 @@ nano config.yaml                  # adjust scan mode, threads, etc.
 # Standard deep scan
 python main.py --target example.com --mode deep
 
+# Update BBH-AI from GitHub
+python main.py --update
+
 # Quick scan with debug output
 python main.py --target example.com --mode quick --verbose
 
@@ -243,6 +256,7 @@ python main.py --target example.com --mode stealth
 | `--mode` | from config | `quick` / `deep` / `stealth` |
 | `--ci` | `false` | CI mode: structured exit codes + notifications |
 | `--verbose` | `false` | Enable DEBUG-level logging |
+| `--update`, `-u` | `false` | Auto-update from GitHub + update dependencies |
 
 ---
 

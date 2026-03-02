@@ -192,7 +192,8 @@ class AgentController:
             agents=agents,
             tasks=tasks,
             process=Process.sequential,
-            verbose=True,   # Fixed: was verbose=2 (deprecated in current CrewAI)
+            verbose=True,
+            cache=True,  # Optimisation: reuse results for identical tasks
         )
 
         self.logger.info(f"Starting crew with {len(agents)} agents and {len(tasks)} tasks.")

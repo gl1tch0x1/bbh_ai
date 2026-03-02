@@ -83,14 +83,30 @@ def main() -> None:
             "  python main.py --target example.com --mode quick --ci --verbose\n"
         ),
     )
-    parser.add_argument("--target",  required=True,  help="Target domain or URL")
+    parser.add_argument("--target",  required=False, help="Target domain or URL (required unless --update is used)")
     parser.add_argument("--config",  default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--mode",    choices=["quick", "deep", "stealth"], help="Override scan mode")
     parser.add_argument("--ci",      action="store_true", help="CI mode: no prompts, structured exit codes")
     parser.add_argument("--verbose", action="store_true", help="Enable debug-level logging")
+    parser.add_argument("--update", "-u", action="store_true", help="Check for and install updates from GitHub")
     args = parser.parse_args()
 
     setup_logging(logging.DEBUG if args.verbose else logging.INFO)
+
+    # ── Handle Update ────────────────────────────────────────────────────────
+    if args.update:
+        from update_manager import UpdateManager
+        manager = UpdateManager(root_dir=str(Path(__file__).parent))
+        if manager.update():
+            print("[+] Update successful. Please restart bbh-ai.")
+            sys.exit(0)
+        else:
+            print("[-] Update failed. Check logs for details.")
+            sys.exit(1)
+
+    # --target is required if NOT updating
+    if not args.target:
+        parser.error("--target is required unless --update is used.")
 
     config = load_config(args.config)
     validate_config(config)

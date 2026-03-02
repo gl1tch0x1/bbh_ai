@@ -19,24 +19,33 @@ class ToolRegistry:
 
     def _load_tools(self):
         wrappers_dir = Path(__file__).parent / "wrappers"
-        for pyfile in sorted(wrappers_dir.glob("*.py")):
-            if pyfile.name.startswith("__"):
+        # Recursively search for all .py files in subdirectories
+        for pyfile in sorted(wrappers_dir.rglob("*.py")):
+            if pyfile.name.startswith("__") or pyfile.is_dir():
                 continue
+            
+            # Module name is the stem (e.g., "js_parser")
             module_name = pyfile.stem
-            # e.g. "js_parser" → "JsParserTool"
+            # Get the path relative to wrappers_dir and convert to dot notation
+            # e.g., "web_analysis/js_parser.py" -> "web_analysis.js_parser"
+            relative_parts = pyfile.relative_to(wrappers_dir).with_suffix('').parts
+            module_dot_path = ".".join(relative_parts)
+            
+            # class_name = "JsParserTool"
             class_name = "".join(part.capitalize() for part in module_name.split("_")) + "Tool"
+            
             try:
-                module = importlib.import_module(f"tools.wrappers.{module_name}")
+                module = importlib.import_module(f"tools.wrappers.{module_dot_path}")
                 tool_class = getattr(module, class_name)
                 instance = tool_class(self.config, self.workspace, self.telemetry)
                 self.tools[module_name] = instance
-                self.logger.debug(f"Loaded tool: {module_name} (class: {class_name})")
+                self.logger.debug(f"Loaded tool: {module_name} (class: {class_name} from {module_dot_path})")
             except AttributeError:
                 self.logger.error(
-                    f"Tool class '{class_name}' not found in tools/wrappers/{module_name}.py"
+                    f"Tool class '{class_name}' not found in tools/wrappers/{module_dot_path.replace('.', '/')}.py"
                 )
             except Exception as e:
-                self.logger.error(f"Failed to load tool '{module_name}': {e}")
+                self.logger.error(f"Failed to load tool '{module_name}' from '{module_dot_path}': {e}")
 
     def get_tool(self, name: str):
         """Return a single tool by name, or None if not found."""
