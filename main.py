@@ -40,7 +40,7 @@ def load_config(config_path):
     return config
 
 def main():
-    parser = argparse.ArgumentParser(description="BB-Auto Security Testing Engine")
+    parser = argparse.ArgumentParser(description="BBH-Auto Security Testing Engine")
     parser.add_argument("--target", required=True, help="Target (domain, git repo, URL, or file)")
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
     parser.add_argument("--mode", choices=["quick", "deep", "stealth"], help="Override scan mode")

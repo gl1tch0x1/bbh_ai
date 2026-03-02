@@ -62,7 +62,7 @@ Results are stored in runs/run_YYYYMMDD_HHMMSS/:
 See the detailed design document for full architecture description.
 
 ## Future Enhancements
-We envision BB‑Auto evolving into a comprehensive, community‑driven platform. The following enhancements are planned or open for contribution:
+We envision BBH‑Auto evolving into a comprehensive, community‑driven platform. The following enhancements are planned or open for contribution:
 
 1. 🧠 Agent Capabilities:
 

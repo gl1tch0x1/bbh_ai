@@ -107,7 +107,7 @@ systemctl enable docker --now
 
 if [[ -f sandbox/Dockerfile.sandbox ]]; then
     print_status "Building sandbox Docker image..."
-    docker build -t bb-sandbox -f sandbox/Dockerfile.sandbox .
+    docker build -t bbh-sandbox -f sandbox/Dockerfile.sandbox .
 else
     print_warning "sandbox/Dockerfile.sandbox not found. Skipping Docker image build."
 fi
