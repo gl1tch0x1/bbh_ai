@@ -8,12 +8,13 @@ from telemetry.logger import Telemetry
 from reporting.generator import ReportGenerator
 from tools.registry import ToolRegistry
 from validation.validator import Validator
+from ci.notifier import CINotifier, NotificationPayload
 import subprocess
 
 
 @dataclass
 class ScanResult:
-    """Structured result object returned from Orchestrator.run()."""
+    """Structured result returned from Orchestrator.run()."""
     report_path: str
     exit_code: int
 
@@ -28,8 +29,9 @@ class Orchestrator:
         self.tool_registry = ToolRegistry(config, self.workspace, self.telemetry)
         self.agent_controller = AgentController(config, self.workspace, self.telemetry, self.tool_registry)
         self.validator = Validator(config, self.workspace, self.telemetry)
+        self.ci_notifier = CINotifier(config)
         self.logger = logging.getLogger(__name__)
-        self._rate_limit = config.get('scan', {}).get('rate_limit', 0)  # requests/sec
+        self._rate_limit = config.get('scan', {}).get('rate_limit', 0)
         self._js_limit = config.get('scan', {}).get('js_file_limit', 10)
 
     def _validate_env(self):
@@ -37,15 +39,12 @@ class Orchestrator:
         if self.config['sandbox']['enabled']:
             try:
                 subprocess.run(["docker", "info"], check=True, capture_output=True)
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, FileNotFoundError):
                 self.logger.error("Docker is not running or not installed.")
                 raise RuntimeError("Docker required but not available.")
-            except FileNotFoundError:
-                self.logger.error("Docker executable not found.")
-                raise RuntimeError("Docker not installed or not on PATH.")
         for key in ['openai_api_key', 'anthropic_api_key', 'google_api_key', 'deepseek_api_key']:
             if not self.config['llm'].get(key):
-                self.logger.warning(f"LLM key {key} is missing. Some agents may not work.")
+                self.logger.warning(f"LLM key '{key}' is missing — some agents may not work.")
         self.logger.info("Environment validation passed.")
 
     def _rate_sleep(self):
@@ -63,7 +62,7 @@ class Orchestrator:
             "urls": [],
             "tech_stack": {},
             "js_files": [],
-            "endpoints": []
+            "endpoints": [],
         }
 
         # Subdomain enumeration
@@ -73,14 +72,14 @@ class Orchestrator:
             attack_surface["subdomains"] = result.get("subdomains", [])
             self._rate_sleep()
         else:
-            self.logger.warning("Subfinder tool not available")
+            self.logger.warning("subfinder not available — skipping subdomain enumeration.")
 
         # Live host probing
         httpx = self.tool_registry.get_tool("httpx")
         live_hosts = []
         if httpx and attack_surface["subdomains"]:
             sub_file = self.workspace / "subs_for_httpx.txt"
-            sub_file.write_text("\n".join(attack_surface["subdomains"]))
+            sub_file.write_text("\n".join(attack_surface["subdomains"]), encoding="utf-8")
             result = httpx.run(host_list=str(sub_file))
             live_hosts = result.get("results", [])
             attack_surface["live_hosts"] = live_hosts
@@ -98,18 +97,17 @@ class Orchestrator:
             attack_surface["urls"] = result.get("urls", [])
             self._rate_sleep()
 
-        # JS file discovery and parsing
+        # JS file parsing
         js_urls = [u for u in attack_surface["urls"] if u.endswith('.js')]
         js_parser = self.tool_registry.get_tool("js_parser")
         if js_parser and js_urls:
             for js in js_urls[:self._js_limit]:
                 result = js_parser.run(js_url=js, base_url=target)
-                if "endpoints" in result:
-                    attack_surface["endpoints"].extend(result["endpoints"])
+                attack_surface["endpoints"].extend(result.get("endpoints", []))
                 self._rate_sleep()
-            attack_surface["js_files"] = js_urls
+            attack_surface["js_files"] = js_urls[:self._js_limit]
 
-        # Technology detection for main domain and live hosts
+        # Technology detection
         tech_detect = self.tool_registry.get_tool("tech_detect")
         if tech_detect:
             for host in live_hosts:
@@ -125,10 +123,10 @@ class Orchestrator:
                 self._rate_sleep()
 
         self.logger.info(
-            f"Attack surface prepared: {len(attack_surface['subdomains'])} subdomains, "
+            f"Attack surface: {len(attack_surface['subdomains'])} subdomains, "
             f"{len(attack_surface['live_hosts'])} live hosts, "
             f"{len(attack_surface['urls'])} URLs, "
-            f"{len(attack_surface['endpoints'])} endpoints from JS."
+            f"{len(attack_surface['endpoints'])} JS endpoints."
         )
         return attack_surface
 
@@ -140,21 +138,22 @@ class Orchestrator:
             return 2
         return 0
 
-    def run(self, target):
+    def run(self, target: str) -> ScanResult:
         self._validate_env()
         try:
             attack_surface = self._prepare_target(target)
             raw_findings = self.agent_controller.run(attack_surface)
 
-            # Validate and deduplicate findings
+            # Validate and deduplicate
             validated = [self.validator.validate(f, self.tool_registry) for f in raw_findings]
             findings = self.validator.deduplicate(validated)
 
+            # Generate reports
             report_gen = ReportGenerator(self.config, self.workspace, target=target)
             report_paths = report_gen.generate(findings)
 
-            # Use markdown path as primary display path; fall back to first available
-            primary_report = (
+            # Primary display path
+            primary = (
                 report_paths.get("markdown")
                 or report_paths.get("json")
                 or report_paths.get("csv")
@@ -166,10 +165,26 @@ class Orchestrator:
                 if self.config.get('ci', {}).get('exit_codes')
                 else 0
             )
-            return ScanResult(report_path=primary_report, exit_code=exit_code)
+
+            # CI notifications (Slack + GitHub)
+            if self.config.get('ci', {}).get('enabled'):
+                from collections import Counter
+                sev_counts = Counter(f.get('severity', 'info').lower() for f in findings)
+                payload = NotificationPayload(
+                    target=target,
+                    total=len(findings),
+                    critical=sev_counts.get('critical', 0),
+                    high=sev_counts.get('high', 0),
+                    medium=sev_counts.get('medium', 0),
+                    low=sev_counts.get('low', 0),
+                    report_path=primary,
+                    exit_code=exit_code,
+                )
+                self.ci_notifier.notify(payload)
+
+            return ScanResult(report_path=primary, exit_code=exit_code)
         finally:
-            # Always persist telemetry, even on failure
             try:
                 self.telemetry.save()
             except Exception:
-                self.logger.warning("Failed to save telemetry data.")
+                self.logger.warning("Failed to persist telemetry.")

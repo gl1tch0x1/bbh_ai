@@ -12,6 +12,16 @@ from pathlib import Path
 
 import yaml
 
+# ── Load .env FIRST, before any other imports that might read env vars ───────
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).parent / ".env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=_env_path, override=False)
+        # override=False: real shell env vars always take precedence over .env
+except ImportError:
+    pass  # python-dotenv not installed — fall back to OS env vars only
+
 from orchestrator import Orchestrator
 
 REQUIRED_SECTIONS = ['llm', 'agents', 'sandbox', 'scan', 'reporting']
@@ -54,13 +64,12 @@ def load_config(config_path: str) -> dict:
 
 
 def validate_config(config: dict) -> None:
-    """Validate required top-level sections are present."""
+    """Validate required top-level sections and default optional ones."""
     missing = [s for s in REQUIRED_SECTIONS if s not in config]
     if missing:
         logging.error(f"Config is missing required section(s): {', '.join(missing)}")
         sys.exit(1)
-
-    # Ensure 'ci' section exists so orchestrator can safely access it
+    # Ensure ci section exists so orchestrator can safely access it
     config.setdefault('ci', {})
 
 
@@ -68,11 +77,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="BBH-AI – Multi-Agent AI Security Testing Engine",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python main.py --target example.com --mode deep\n"
+            "  python main.py --target example.com --mode quick --ci --verbose\n"
+        ),
     )
-    parser.add_argument("--target",  required=True,  help="Target domain, URL, or Git repo")
+    parser.add_argument("--target",  required=True,  help="Target domain or URL")
     parser.add_argument("--config",  default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--mode",    choices=["quick", "deep", "stealth"], help="Override scan mode")
-    parser.add_argument("--ci",      action="store_true", help="CI mode: no prompts, exit codes")
+    parser.add_argument("--ci",      action="store_true", help="CI mode: no prompts, structured exit codes")
     parser.add_argument("--verbose", action="store_true", help="Enable debug-level logging")
     args = parser.parse_args()
 
@@ -92,13 +106,18 @@ def main() -> None:
     try:
         result = orch.run(target=args.target)
     except KeyboardInterrupt:
-        logging.warning("Scan interrupted by user.")
+        logging.warning("Scan interrupted by user (Ctrl+C).")
         sys.exit(130)
     except Exception:
         logging.exception("Fatal error during scan.")
         sys.exit(3)
 
-    print(f"\n[+] Scan complete. Report: {result.report_path}")
+    print(f"\n[+] Scan complete.")
+    if isinstance(result.report_path, dict):
+        for fmt, path in result.report_path.items():
+            print(f"    {fmt.upper()}: {path}")
+    else:
+        print(f"    Report: {result.report_path}")
 
     if args.ci:
         sys.exit(result.exit_code)

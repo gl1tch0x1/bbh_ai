@@ -1,6 +1,5 @@
-# BBH-AI Python Dependencies
-# All versions pinned for reproducible installs.
-# Update with: pip install -r requirements.txt
+# BBH-AI Python Dependencies — pinned for reproducible installs.
+# Install: pip install -r requirements.txt
 
 # ── AI / Agent Framework ─────────────────────────────────────────────────────
 crewai>=0.28.0,<1.0.0
@@ -9,8 +8,9 @@ openai>=1.14.0,<2.0.0          # Used for OpenAI AND DeepSeek (OpenAI-compatible
 anthropic>=0.23.0,<1.0.0
 google-generativeai>=0.5.0,<1.0.0
 
-# ── Config & Runtime ─────────────────────────────────────────────────────────
+# ── Config & .env support ─────────────────────────────────────────────────────
 pyyaml>=6.0.1,<7.0.0
+python-dotenv>=1.0.0,<2.0.0    # Loads .env file into environment variables
 pydantic>=2.0.0,<3.0.0
 
 # ── Sandbox / Container ───────────────────────────────────────────────────────

@@ -1,97 +1,401 @@
-# BBH-AI: Multi-Agent AI-Orchestrated Security Testing Engine
+# BBH-AI — Multi-Agent AI-Orchestrated Security Testing Engine
 
-bbh-ai is an advanced bug bounty automation framework that uses multiple AI agents to plan, execute, and validate security tests. It integrates industry-standard tools, runs exploits in isolated Docker sandboxes, and generates comprehensive reports suitable for CI/CD pipelines.
+> **BBH-AI** is an advanced bug bounty automation framework powered by multi-agent AI. It chains security tools together intelligently, runs exploits in isolated Docker sandboxes, and generates structured reports ready for CI/CD pipelines.
 
-## Features
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![CrewAI](https://img.shields.io/badge/Powered%20by-CrewAI-orange)](https://crewai.com)
 
-- Multi-agent orchestration (Planner, Recon, Exploit, Reporter)
-- LLM integration (OpenAI, Anthropic, Google, DeepSeek)
-- Sandboxed execution of dangerous tools
-- Technology stack detection (Wappalyzer)
-- JavaScript parsing for endpoint discovery
-- Structured attack surface preparation
-- AI-assisted false positive reduction
-- CI/CD ready with exit codes and webhook alerts
-- Modular tool registry for easy extension
+---
 
-## Installation
+## ✨ Features
 
-1. **Clone the repository:**
-   ```bash
-   git clone git clone https://github.com/gl1tch0x1/bbh_ai.git
-   cd bbh-ai
+| Feature | Detail |
+|---------|--------|
+| 🤖 **Multi-Agent Orchestration** | Planner → Recon → Exploit → Reporter pipeline |
+| 🧠 **LLM Flexibility** | OpenAI, Anthropic, Google Gemini, DeepSeek |
+| 🔒 **Sandboxed Execution** | Dangerous tools run inside isolated Docker containers |
+| 🛠️ **11 Integrated Tools** | subfinder, httpx, gau, katana, gospider, nuclei, dalfox, waymore, js_parser, tech_detect + more |
+| 📄 **Multi-Format Reports** | Markdown, JSON, CSV with severity tables and PoC blocks |
+| 🔁 **CI/CD Ready** | Exit codes (0/1/2), Slack notifications, GitHub Issue creation |
+| 🔌 **Extensible** | Drop a new `.py` file in `tools/wrappers/` — registry auto-loads it |
+| 🗺️ **Memory Graph** | In-session knowledge graph tracks asset relationships across agents |
+| 🔑 **`.env` Support** | Store all API keys in `.env` — never hardcode credentials |
 
-**Run the installer as root:**
-```bash
-sudo ./installer.sh
+---
+
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    CLI["🖥️ main.py\n(CLI Entry Point)"]
+    ENV["📄 .env\n(API Keys)"]
+    CFG["⚙️ config.yaml\n(Settings)"]
+
+    CLI --> ENV
+    CLI --> CFG
+    CLI --> ORCH
+
+    subgraph ORCH["🎛️ Orchestrator"]
+        direction TB
+        VAL_ENV["validate_env()"]
+        PREP["_prepare_target()"]
+        RUN["agent_controller.run()"]
+        REPORT["ReportGenerator"]
+        NOTIFY["CINotifier"]
+        TEL["Telemetry.save()"]
+    end
+
+    PREP --> TOOLS
+    RUN --> AGENTS
+
+    subgraph TOOLS["🧰 Tool Registry (Auto-loaded)"]
+        direction LR
+        SF["subfinder"]
+        HX["httpx"]
+        GAU["gau"]
+        KAT["katana"]
+        GS["gospider"]
+        NC["nuclei"]
+        DF["dalfox"]
+        WM["waymore"]
+        JS["js_parser"]
+        TD["tech_detect"]
+    end
+
+    subgraph AGENTS["🤖 CrewAI Agent Pipeline"]
+        direction LR
+        PL["🧭 Planner\n(gpt-4)"]
+        RC["🔍 Recon\n(gpt-3.5-turbo)"]
+        EX["💥 Exploit\n(gpt-4)"]
+        RP["📝 Reporter\n(gpt-4)"]
+        PL --> RC --> EX --> RP
+    end
+
+    subgraph SANDBOX["🐳 Docker Sandbox"]
+        direction TB
+        SC["SandboxClient"]
+        SV["FastAPI Server\n(:8000)"]
+        SC --> SV
+    end
+
+    TOOLS --> SANDBOX
+    AGENTS --> VALID
+
+    subgraph VALID["✅ Validation"]
+        VL["Validator\n(normalise + deduplicate)"]
+        MG["MemoryGraph\n(in-session knowledge)"]
+    end
+
+    VALID --> REPORT
+    REPORT --> OUT
+
+    subgraph OUT["📦 Output — runs/run_YYYYMMDD_HHMMSS/"]
+        direction LR
+        MD["report.md"]
+        JS2["report.json"]
+        CSV["report.csv"]
+        TJ["telemetry.json"]
+    end
+
+    REPORT --> NOTIFY
+    NOTIFY --> SLACK["💬 Slack Webhook"]
+    NOTIFY --> GH["🐙 GitHub Issues"]
 ```
-Activate the Python virtual environment:
-```bash
-source venv/bin/activate
-```
-Edit config.yaml to add your LLM API keys and adjust settings.
 
-## **Usage**
+---
+
+## 🔄 Scan Workflow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as main.py
+    participant Orch as Orchestrator
+    participant Tools as ToolRegistry
+    participant Crew as CrewAI Agents
+    participant Sandbox as Docker Sandbox
+    participant Report as ReportGenerator
+    participant CI as CINotifier
+
+    User->>CLI: python main.py --target example.com --mode deep
+    CLI->>CLI: Load .env → expand config.yaml vars
+    CLI->>Orch: Orchestrator(config)
+    Orch->>Orch: _validate_env() [Docker + API key checks]
+
+    Note over Orch,Tools: Attack Surface Preparation
+    Orch->>Tools: subfinder.run(domain)
+    Tools-->>Orch: {subdomains: [...]}
+    Orch->>Tools: httpx.run(host_list)
+    Tools-->>Orch: {results: [live hosts + tech stack]}
+    Orch->>Tools: gau.run(domain)
+    Tools-->>Orch: {urls: [...]}
+    Orch->>Tools: js_parser.run(js_url) × N
+    Tools-->>Orch: {endpoints: [...]}
+    Orch->>Tools: tech_detect.run(url)
+    Tools-->>Orch: {technologies: [...]}
+
+    Note over Orch,Crew: AI Agent Pipeline (CrewAI Sequential)
+    Orch->>Crew: crew.kickoff(attack_surface)
+    Crew->>Crew: Planner → creates testing plan
+    Crew->>Crew: Recon Agent → enriches attack surface
+    Crew->>Sandbox: Tool calls via SandboxClient
+    Sandbox-->>Crew: Isolated tool results
+    Crew->>Crew: Exploit Agent → validates vulnerabilities
+    Crew->>Crew: Reporter Agent → assigns severity + PoC
+
+    Note over Orch,Report: Post-Processing
+    Orch->>Orch: Validator.validate() + deduplicate()
+    Orch->>Report: generate(findings) → .md / .json / .csv
+    Orch->>CI: notify(payload) if CI mode
+    CI->>CI: POST Slack webhook
+    CI->>CI: POST GitHub Issues API
+    Orch->>Orch: telemetry.save()
+
+    Report-->>User: runs/run_YYYYMMDD_HHMMSS/
+```
+
+---
+
+## 🚀 Quick Start
+
+### 1. Clone & Install
+
 ```bash
+git clone https://github.com/gl1tch0x1/bbh_ai.git
+cd bbh-ai
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+
+# Install Python dependencies
+pip install -r requirements.txt
+```
+
+### 2. Install Security Tools
+
+```bash
+# Run the installer (Linux/macOS)
+chmod +x installer.sh && sudo ./installer.sh
+
+# Or install manually
+go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install -v github.com/lc/gau/v2/cmd/gau@latest
+go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+go install -v github.com/jaeles-project/gospider@latest
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+go install -v github.com/hahwul/dalfox/v2@latest
+pip install waymore
+```
+
+### 3. Configure API Keys
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your real credentials:
+
+```env
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=AIza...
+DEEPSEEK_API_KEY=sk-...
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+GITHUB_TOKEN=ghp_...
+```
+
+> ⚠️ **Never commit `.env`** — it is already in `.gitignore`.
+
+### 4. Review `config.yaml`
+
+```bash
+cp config.yaml config.yaml.bak   # optional backup
+nano config.yaml                  # adjust scan mode, threads, etc.
+```
+
+---
+
+## 🖥️ Usage
+
+```bash
+# Standard deep scan
 python main.py --target example.com --mode deep
+
+# Quick scan with debug output
+python main.py --target example.com --mode quick --verbose
+
+# CI mode — exits with code 0 (clean), 1 (critical), 2 (high)
+python main.py --target example.com --ci
+
+# Stealth mode (slower, lower rate-limit)
+python main.py --target example.com --mode stealth
 ```
-For CI mode (exit codes, no prompts):
 
-```bash
-python main.py --target https://github.com/org/repo.git --ci
+### CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--target` | *(required)* | Domain or URL to scan |
+| `--config` | `config.yaml` | Path to config file |
+| `--mode` | from config | `quick` / `deep` / `stealth` |
+| `--ci` | `false` | CI mode: structured exit codes + notifications |
+| `--verbose` | `false` | Enable DEBUG-level logging |
+
+---
+
+## 📦 Output
+
+All results are saved to `runs/run_YYYYMMDD_HHMMSS/`:
+
 ```
-## Output
-Results are stored in runs/run_YYYYMMDD_HHMMSS/:
+runs/
+└── run_20260302_201835/
+    ├── report.md          ← Human-readable Markdown summary
+    ├── report.json        ← Machine-readable structured data
+    ├── report.csv         ← Spreadsheet-compatible export
+    ├── telemetry.json     ← Tool timing, errors, agent logs
+    └── subs_for_httpx.txt ← Intermediate recon data
+```
 
-* report.md – Markdown summary
+### Exit Codes (CI mode)
 
-* findings.json – Structured JSON
+| Code | Meaning |
+|------|---------|
+| `0` | No findings, or only medium/low severity |
+| `1` | At least one **critical** finding |
+| `2` | At least one **high** finding (no critical) |
+| `130` | Interrupted by user (Ctrl+C) |
+| `3` | Unexpected fatal error |
 
-* vulnerabilities.csv – CSV for spreadsheets
+---
 
-* telemetry.json – Performance logs
+## 🧰 Tool Reference
 
-## Adding New Tools
-* Create a new Python file in tools/wrappers/ following the existing pattern.
+| Tool | Category | Description |
+|------|----------|-------------|
+| `subfinder` | recon | Passive subdomain enumeration |
+| `httpx` | recon | HTTP probing, tech detection, status codes |
+| `gau` | recon | Fetch known URLs from AlienVault, Wayback, etc. |
+| `katana` | recon | Active web crawler with JS parsing |
+| `gospider` | recon | Spider + sitemap/robots.txt discovery |
+| `waymore` | recon | Extended Wayback Machine URL collector |
+| `js_parser` | recon | Extracts endpoints from JavaScript files |
+| `tech_detect` | recon | Technology fingerprinting via Wappalyzer |
+| `nuclei` | exploit/recon | Template-based vulnerability scanner |
+| `dalfox` | exploit | XSS parameter scanner |
 
-* Implement a class with name, input_schema, __init__, and run method.
+---
 
-* The tool will be automatically loaded by the registry.
+## ➕ Adding New Tools
 
-* Architecture
-See the detailed design document for full architecture description.
+1. Create `tools/wrappers/mytool.py` following this template:
 
-## Future Enhancements
-We envision BBH‑Auto evolving into a comprehensive, community‑driven platform. The following enhancements are planned or open for contribution:
+```python
+class MytoolTool:
+    name = "mytool"
+    categories = ["recon"]           # determines which agents receive this tool
+    input_schema = {"target": str}
 
-1. 🧠 Agent Capabilities:
+    def __init__(self, config, workspace, telemetry):
+        self.config = config
+        self.workspace = workspace
+        self.telemetry = telemetry
+        self._timeout = (config or {}).get('scan', {}).get('timeout', 60)
 
-      * Hierarchical Task Decomposition – Agents break down complex goals into sub‑tasks and coordinate.
-      * Self‑Improvement Loop – Agents learn from past scans to refine strategies.
-     * Multi‑Model Ensemble – Use multiple LLMs and vote on decisions to reduce bias.
-    * Fine‑Tuned Security Models – Custom models trained on vulnerability data.
+    def run(self, target: str) -> dict:
+        # ... your implementation ...
+        return {"results": [...]}
+```
 
+2. **That's it** — `ToolRegistry` auto-discovers and loads it on next run.
 
-2. 🔧 Tool Integrations
-    * Mobile App Testing – Add apkleaks, mobsf, objection for Android/iOS.
-    * Cloud Security – Integrate prowler, scoutsuite for AWS/Azure/GCP.
-    * GraphQL Testing – Tools like graphql-map, inql.
-    * Blockchain/Smart Contracts – slither, mythril.
-    * Network Level – nmap, masscan already present, but deeper integration with metasploit for exploitation.
+---
 
+## 🔧 Configuration Reference
 
-3. 🧪 Advanced Validation
-   * Dynamic Payload Mutation – Fuzz validated findings with variants.
-   * Out‑of‑Band Detection – Integrate interactsh for blind vulnerabilities.
-   * Time‑Based Detection – Detect race conditions, rate‑limiting issues.
+```yaml
+# config.yaml
+llm:
+  default_model: "gpt-4"    # Fallback model if agent doesn't specify one
+  temperature: 0.2
 
-4. 🚀 Performance & Scale
-   * Distributed Scanning – Spread tasks across multiple sandbox containers.
-   * Queue‑Based Architecture – Use Redis/Celery for job management.
-   * Database Storage – Store findings in PostgreSQL/Elasticsearch for historical analysis.
-   * Web Dashboard – Real‑time monitoring of scans via a React/Next.js UI.
+scan:
+  mode: "deep"              # quick (fast) / deep (thorough) / stealth (slow+quiet)
+  threads: 50               # Parallel slots (future)
+  rate_limit: 10            # Max tool invocations per second
+  timeout: 60               # Seconds per tool subprocess call
+  js_file_limit: 20         # Max JS files parsed per scan
 
+sandbox:
+  enabled: true             # Set false to run tools directly (no Docker)
+  image: "bb-sandbox"       # Docker image name
+  network: "none"           # none=fully isolated | bridge=internet access
+  memory_limit: "2g"
+  cpu_limit: 1.0
+  ephemeral: true           # Destroy container after each use
 
-***We welcome contributions! If you’d like to work on any of these items, please open an issue or pull request.***
+ci:
+  enabled: false
+  exit_codes: true          # Use structured exit codes for pipeline gates
+  slack_webhook: "${SLACK_WEBHOOK_URL}"
+  github_token: "${GITHUB_TOKEN}"
+  github_repo: "org/repo"   # For auto-opening GitHub Issues
+```
 
-Happy Hacking! 🎯
+---
+
+## 🗺️ Module Map
+
+```mermaid
+graph LR
+    main["main.py"] --> orch["orchestrator.py"]
+    orch --> ac["agent_controller.py"]
+    orch --> rg["reporting/generator.py"]
+    orch --> tel["telemetry/logger.py"]
+    orch --> val["validation/validator.py"]
+    orch --> cin["ci/notifier.py"]
+    ac --> mg["memory/graph.py"]
+    ac --> tr["tools/registry.py"]
+    tr --> sw["tools/wrappers/*.py\n(11 tools)"]
+    sw --> sc["sandbox/client.py"]
+    sc --> ss["sandbox/server.py\n(FastAPI inside Docker)"]
+```
+
+---
+
+## 🔮 Roadmap
+
+| Area | Planned Enhancement |
+|------|---------------------|
+| 🧠 **Agents** | Hierarchical task decomposition; self-improvement loop |
+| 📱 **Mobile** | `apkleaks`, `mobsf`, `objection` for Android/iOS |
+| ☁️ **Cloud** | `prowler`, `scoutsuite` for AWS/Azure/GCP |
+| 🔗 **GraphQL** | `graphql-map`, `inql` |
+| ⛓️ **Blockchain** | `slither`, `mythril` for smart contracts |
+| 📡 **Out-of-Band** | `interactsh` integration for blind vulnerabilities |
+| 🌐 **Dashboard** | Real-time React/Next.js scan monitoring UI |
+| 🗄️ **Storage** | PostgreSQL/Elasticsearch for historical scan data |
+| 🚀 **Scale** | Redis/Celery queue-based distributed scanning |
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+1. Fork the repo and create a feature branch
+2. Follow the existing tool wrapper pattern
+3. Add `categories`, `FileNotFoundError` handling, and config-driven `timeout`
+4. Open a PR — we'll review and merge
+
+---
+
+## ⚠️ Legal Disclaimer
+
+> BBH-AI is intended **only for authorized security testing**. Never scan targets you do not own or have explicit written permission to test. Misuse may violate computer fraud laws. The authors accept no liability for unauthorized or illegal use.
+
+---
+
+*Happy Hacking! 🎯 — Built by [gl1tch0x1](https://github.com/gl1tch0x1)*
