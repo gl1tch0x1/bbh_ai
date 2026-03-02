@@ -1,4 +1,4 @@
-# BB-AI: Multi-Agent AI-Orchestrated Security Testing Engine
+# BBH-AI: Multi-Agent AI-Orchestrated Security Testing Engine
 
 bbh-ai is an advanced bug bounty automation framework that uses multiple AI agents to plan, execute, and validate security tests. It integrates industry-standard tools, runs exploits in isolated Docker sandboxes, and generates comprehensive reports suitable for CI/CD pipelines.
 
