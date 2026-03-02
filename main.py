@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BB-Auto: Multi-Agent AI-Orchestrated Security Testing Engine
+BB-AI: Multi-Agent AI-Orchestrated Security Testing Engine
 Usage: python main.py --target <domain|repo|url|file> [--config config.yaml] [--mode quick] [--ci]
 """
 

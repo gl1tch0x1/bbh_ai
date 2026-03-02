@@ -1,4 +1,4 @@
-# config.yaml – BB‑Auto Configuration
+# config.yaml – BB‑AI Configuration
 # Use environment variables for sensitive keys (e.g., ${OPENAI_API_KEY})
 
 llm:
