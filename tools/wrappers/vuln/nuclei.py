@@ -34,11 +34,32 @@ class NucleiTool:
             if result.returncode != 0:
                 self.logger.error(f"nuclei failed: {result.stderr.strip()}")
                 return {"error": result.stderr.strip(), "findings": []}
-            findings = [line for line in result.stdout.strip().splitlines() if line]
+            findings = []
+            if result.stdout.strip():
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        try:
+                            findings.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+
+            output = {
+                "tool": self.name,
+                "inputs": {"target": target, "templates": templates},
+                "outputs": {
+                    "results": [
+                        {"type": "vuln", "value": target, "source": self.name, "metadata": f}
+                        for f in findings
+                    ],
+                    "count": len(findings)
+                },
+                "metadata": {"status": "success" if result.returncode == 0 else "warning"}
+            }
+
             if self.telemetry:
-                self.telemetry.log_tool_call("nuclei", {"target": target}, len(findings))
-            self.logger.info(f"nuclei found {len(findings)} findings for {target}")
-            return {"findings": findings}
+                self.telemetry.log_tool_call(self.name, {"target": target}, output)
+            
+            return output
         except subprocess.TimeoutExpired:
             self.logger.error(f"nuclei timed out after {self._timeout}s")
             return {"error": "timeout", "findings": []}

@@ -1,190 +1,183 @@
-import os
-import time
+import asyncio
 import logging
-from dataclasses import dataclass
+import time
 from pathlib import Path
-from agent_controller import AgentController
-from telemetry.logger import Telemetry
-from reporting.generator import ReportGenerator
-from tools.registry import ToolRegistry
-from validation.validator import Validator
-from ci.notifier import CINotifier, NotificationPayload
-import subprocess
+from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING
+from dataclasses import dataclass
 
+if TYPE_CHECKING:
+    from telemetry.logger import Telemetry
+    from tools.registry import ToolRegistry
+    from agent_controller import AgentController
+    from validation.validator import Validator
+    from reporting.generator import ReportGenerator
 
 @dataclass
 class ScanResult:
     """Structured result returned from Orchestrator.run()."""
-    report_path: str
+    report_path: Union[str, Dict[str, str]]
     exit_code: int
-
+    findings: List[Dict[str, Any]]
 
 class Orchestrator:
-    def __init__(self, config):
+    """
+    The central brain of BBH-AI. Orchestrates the A-E phased workflow.
+    Refactored for asyncio to support high-performance scanning and resource management.
+    """
+
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.run_id = f"run_{time.strftime('%Y%m%d_%H%M%S')}"
-        self.workspace = Path(config['reporting']['output_dir']) / self.run_id
+        
+        # Determine workspace
+        out_dir = config.get('reporting', {}).get('output_dir', './scans')
+        self.workspace = Path(out_dir) / self.run_id
         self.workspace.mkdir(parents=True, exist_ok=True)
-        self.telemetry = Telemetry(self.workspace / "telemetry.json")
-        self.tool_registry = ToolRegistry(config, self.workspace, self.telemetry)
-        self.agent_controller = AgentController(config, self.workspace, self.telemetry, self.tool_registry)
-        self.validator = Validator(config, self.workspace, self.telemetry)
-        self.ci_notifier = CINotifier(config)
+
         self.logger = logging.getLogger(__name__)
-        self._rate_limit = config.get('scan', {}).get('rate_limit', 0)
-        self._js_limit = config.get('scan', {}).get('js_file_limit', 10)
+        
+        # Telemetry & Tool Registry
+        from telemetry.logger import Telemetry
+        self.telemetry = Telemetry(self.workspace / "telemetry.json")
+        
+        from tools.registry import ToolRegistry
+        self.tool_registry = ToolRegistry(config, self.workspace, self.telemetry)
+        
+        # AI Controller
+        from agent_controller import AgentController
+        self.agent_controller = AgentController(config, self.workspace, self.telemetry, self.tool_registry)
+        
+        # Utilities
+        from validation.validator import Validator
+        self.validator = Validator(config, self.workspace, self.telemetry)
+        
+        # CI Integration
+        from ci.notifier import CINotifier
+        self.ci_notifier = CINotifier(config)
 
-    def _validate_env(self):
-        self.logger.info("Validating environment...")
-        if self.config['sandbox']['enabled']:
-            try:
-                subprocess.run(["docker", "info"], check=True, capture_output=True)
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                self.logger.error("Docker is not running or not installed.")
-                raise RuntimeError("Docker required but not available.")
-        for key in ['openai_api_key', 'anthropic_api_key', 'google_api_key', 'deepseek_api_key']:
-            if not self.config['llm'].get(key):
-                self.logger.warning(f"LLM key '{key}' is missing — some agents may not work.")
-        self.logger.info("Environment validation passed.")
+        # Resource Management: Semaphore to limit concurrent tool executions
+        max_concurrent = config.get('scan', {}).get('max_concurrent_tools', 5)
+        self._tool_semaphore = asyncio.Semaphore(max_concurrent)
 
-    def _rate_sleep(self):
-        """Respect configured rate limit between tool invocations."""
-        if self._rate_limit and self._rate_limit > 0:
-            time.sleep(1.0 / self._rate_limit)
-
-    def _prepare_target(self, target):
-        self.logger.info(f"Preparing target: {target}")
-        attack_surface = {
-            "target": target,
-            "type": "domain",
-            "subdomains": [],
-            "live_hosts": [],
-            "urls": [],
-            "tech_stack": {},
-            "js_files": [],
-            "endpoints": [],
+    async def run(self, target: str) -> ScanResult:
+        """Execute the full phased workflow asynchronously."""
+        self.logger.info(f"🚀 [ORCHESTRATOR] Starting Phased Scan for: {target}")
+        start_time = time.time()
+        
+        # Initialize state with target and workflow control
+        state: Dict[str, Any] = {
+            "target": target, 
+            "start_time": start_time,
+            "phase_data": {}
         }
+        
+        phases = ["A", "B", "C", "D", "E"]
+        start_phase = self.config.get('scan', {}).get('start_phase', 'A')
+        
+        try:
+            start_idx = phases.index(start_phase)
+        except ValueError:
+            start_idx = 0
+        
+        current_phases = phases[start_idx:]
 
-        # Subdomain enumeration
-        subfinder = self.tool_registry.get_tool("subfinder")
-        if subfinder:
-            result = subfinder.run(domain=target)
-            attack_surface["subdomains"] = result.get("subdomains", [])
-            self._rate_sleep()
-        else:
-            self.logger.warning("subfinder not available — skipping subdomain enumeration.")
+        try:
+            # Phase A: Discovery
+            if "A" in current_phases:
+                state["phase_data"]["A"] = await self._run_phase_a(target)
+            else:
+                state["phase_data"]["A"] = {}
 
-        # Live host probing
-        httpx = self.tool_registry.get_tool("httpx")
-        live_hosts = []
-        if httpx and attack_surface["subdomains"]:
-            sub_file = self.workspace / "subs_for_httpx.txt"
-            sub_file.write_text("\n".join(attack_surface["subdomains"]), encoding="utf-8")
-            result = httpx.run(host_list=str(sub_file))
-            live_hosts = result.get("results", [])
-            attack_surface["live_hosts"] = live_hosts
-            for item in live_hosts:
-                url = item.get("url")
-                tech = item.get("tech", [])
-                if url:
-                    attack_surface["tech_stack"][url] = tech
-            self._rate_sleep()
+            # Phase B: Host enrichment
+            if "B" in current_phases:
+                state["phase_data"]["B"] = await self._run_phase_b(state)
+            else:
+                state["phase_data"]["B"] = {}
 
-        # URL collection
-        gau = self.tool_registry.get_tool("gau")
-        if gau:
-            result = gau.run(domain=target)
-            attack_surface["urls"] = result.get("urls", [])
-            self._rate_sleep()
+            # Phase C: Web recon
+            if "C" in current_phases:
+                state["phase_data"]["C"] = await self._run_phase_c(state)
+            else:
+                state["phase_data"]["C"] = {}
 
-        # JS file parsing
-        js_urls = [u for u in attack_surface["urls"] if u.endswith('.js')]
-        js_parser = self.tool_registry.get_tool("js_parser")
-        if js_parser and js_urls:
-            for js in js_urls[:self._js_limit]:
-                result = js_parser.run(js_url=js, base_url=target)
-                attack_surface["endpoints"].extend(result.get("endpoints", []))
-                self._rate_sleep()
-            attack_surface["js_files"] = js_urls[:self._js_limit]
+            # Phase D: Vulnerability scan
+            if "D" in current_phases:
+                state["phase_data"]["D"] = await self._run_phase_d(state)
+            else:
+                state["phase_data"]["D"] = {"findings": []}
 
-        # Technology detection
-        tech_detect = self.tool_registry.get_tool("tech_detect")
-        if tech_detect:
-            for host in live_hosts:
-                url = host.get("url")
-                if url and url not in attack_surface["tech_stack"]:
-                    result = tech_detect.run(url=url)
-                    attack_surface["tech_stack"][url] = result.get("technologies", [])
-                    self._rate_sleep()
-            main_url = f"https://{target}"
-            if main_url not in attack_surface["tech_stack"]:
-                result = tech_detect.run(url=main_url)
-                attack_surface["tech_stack"][main_url] = result.get("technologies", [])
-                self._rate_sleep()
+            # Phase E: Correlation & Reporting
+            final_findings = await self._run_phase_e(state)
+            
+            # Generate Reports
+            from reporting.generator import ReportGenerator
+            report_gen = ReportGenerator(self.config, self.workspace, target=target)
+            report_paths = report_gen.generate(final_findings)
 
-        self.logger.info(
-            f"Attack surface: {len(attack_surface['subdomains'])} subdomains, "
-            f"{len(attack_surface['live_hosts'])} live hosts, "
-            f"{len(attack_surface['urls'])} URLs, "
-            f"{len(attack_surface['endpoints'])} JS endpoints."
+            primary_report = report_paths.get('markdown', str(self.workspace))
+            
+            # CI Logic
+            exit_code = 0
+            if self.config.get('ci', {}).get('enabled'):
+                exit_code = self._calculate_exit_code(final_findings)
+                await self._notify_ci(target, final_findings, primary_report, exit_code)
+
+            return ScanResult(
+                findings=final_findings,
+                report_path=report_paths,
+                exit_code=exit_code
+            )
+
+        finally:
+            self.telemetry.save()
+            duration = time.time() - start_time
+            self.logger.info(f"🏁 [ORCHESTRATOR] Scan complete. Duration: {duration:.2f}s")
+
+    async def _run_phase_a(self, target: str) -> Dict[str, Any]:
+        self.logger.info("--- [Phase A: Discovery (OSINT & Subdomains)] ---")
+        return await asyncio.to_thread(
+            self.agent_controller.run_phase, "discovery", {"target": target}
         )
-        return attack_surface
 
-    def _calculate_exit_code(self, findings):
-        severities = {f.get('severity', '').lower() for f in findings}
-        if 'critical' in severities:
+    async def _run_phase_b(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        self.logger.info("--- [Phase B: Host Enrichment (IP/DNS/Ports)] ---")
+        subdomains = state["phase_data"].get("A", {}).get("subdomains", [])
+        return await asyncio.to_thread(
+            self.agent_controller.run_phase, "enrichment", {"subdomains": subdomains}
+        )
+
+    async def _run_phase_c(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        self.logger.info("--- [Phase C: Web Recon (Tech Stack & Endpoints)] ---")
+        live_hosts = state["phase_data"].get("B", {}).get("live_hosts", [])
+        return await asyncio.to_thread(
+            self.agent_controller.run_phase, "web_recon", {"live_hosts": live_hosts}
+        )
+
+    async def _run_phase_d(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        self.logger.info("--- [Phase D: Vulnerability Scanning (OOB Focused)] ---")
+        # Ensure Phase D has the full context
+        return await asyncio.to_thread(
+            self.agent_controller.run_phase, "vuln_scan", state
+        )
+
+    async def _run_phase_e(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        self.logger.info("--- [Phase E: Final Correlation & Deduplication] ---")
+        raw_findings = state["phase_data"].get("D", {}).get("findings", [])
+        
+        # Validation & Deduplication
+        validated = [self.validator.validate(f, self.tool_registry) for f in raw_findings]
+        return self.validator.deduplicate(validated)
+
+    def _calculate_exit_code(self, findings: List[Dict[str, Any]]) -> int:
+        """Determines exit code: 1 if critical/high vulnerabilities exist."""
+        severities = {str(f.get('severity', '')).lower() for f in findings}
+        if any(s in ('critical', 'high') for s in severities):
             return 1
-        elif 'high' in severities:
-            return 2
         return 0
 
-    def run(self, target: str) -> ScanResult:
-        self._validate_env()
-        try:
-            attack_surface = self._prepare_target(target)
-            raw_findings = self.agent_controller.run(attack_surface)
-
-            # Validate and deduplicate
-            validated = [self.validator.validate(f, self.tool_registry) for f in raw_findings]
-            findings = self.validator.deduplicate(validated)
-
-            # Generate reports
-            report_gen = ReportGenerator(self.config, self.workspace, target=target)
-            report_paths = report_gen.generate(findings)
-
-            # Primary display path
-            primary = (
-                report_paths.get("markdown")
-                or report_paths.get("json")
-                or report_paths.get("csv")
-                or str(self.workspace)
-            )
-
-            exit_code = (
-                self._calculate_exit_code(findings)
-                if self.config.get('ci', {}).get('exit_codes')
-                else 0
-            )
-
-            # CI notifications (Slack + GitHub)
-            if self.config.get('ci', {}).get('enabled'):
-                from collections import Counter
-                sev_counts = Counter(f.get('severity', 'info').lower() for f in findings)
-                payload = NotificationPayload(
-                    target=target,
-                    total=len(findings),
-                    critical=sev_counts.get('critical', 0),
-                    high=sev_counts.get('high', 0),
-                    medium=sev_counts.get('medium', 0),
-                    low=sev_counts.get('low', 0),
-                    report_path=primary,
-                    exit_code=exit_code,
-                )
-                self.ci_notifier.notify(payload)
-
-            return ScanResult(report_path=primary, exit_code=exit_code)
-        finally:
-            try:
-                self.telemetry.save()
-            except Exception:
-                self.logger.warning("Failed to persist telemetry.")
+    async def _notify_ci(self, target: str, findings: List[Dict[str, Any]], primary_report: str, exit_code: int) -> None:
+        """Send asynchronous notifications for CI pipelines."""
+        # Using to_thread for the potentially blocking notification logic
+        await asyncio.to_thread(
+            self.ci_notifier.notify, target, findings, primary_report, exit_code
+        )

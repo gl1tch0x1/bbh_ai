@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 
 import yaml
+import asyncio
 
 # ── Load .env FIRST, before any other imports that might read env vars ───────
 try:
@@ -35,7 +36,7 @@ def setup_logging(level: int = logging.INFO) -> None:
     )
 
 
-def expand_env_vars(config):
+def expand_env_vars(config: any) -> any:
     """Recursively expand ${ENV_VAR} placeholders in config values."""
     if isinstance(config, dict):
         return {k: expand_env_vars(v) for k, v in config.items()}
@@ -81,17 +82,24 @@ def main() -> None:
             "Examples:\n"
             "  python main.py --target example.com --mode deep\n"
             "  python main.py --target example.com --mode quick --ci --verbose\n"
+            "  python main.py --health\n"
         ),
     )
-    parser.add_argument("--target",  required=False, help="Target domain or URL (required unless --update is used)")
+    parser.add_argument("--target",  required=False, help="Target domain or URL (required unless --update or --health is used)")
     parser.add_argument("--config",  default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--mode",    choices=["quick", "deep", "stealth"], help="Override scan mode")
+    parser.add_argument("--phase",   choices=["A", "B", "C", "D", "E"], help="Run scan starting from a specific phase")
+    parser.add_argument("--oob",     action="store_true", help="Explicitly enable Out-of-Band (interactsh) testing")
     parser.add_argument("--ci",      action="store_true", help="CI mode: no prompts, structured exit codes")
     parser.add_argument("--verbose", action="store_true", help="Enable debug-level logging")
+    parser.add_argument("--health",  action="store_true", help="Run system health diagnostic and tools verification")
     parser.add_argument("--update", "-u", action="store_true", help="Check for and install updates from GitHub")
     args = parser.parse_args()
 
     setup_logging(logging.DEBUG if args.verbose else logging.INFO)
+
+    config = load_config(args.config)
+    validate_config(config)
 
     # ── Handle Update ────────────────────────────────────────────────────────
     if args.update:
@@ -104,12 +112,16 @@ def main() -> None:
             print("[-] Update failed. Check logs for details.")
             sys.exit(1)
 
-    # --target is required if NOT updating
-    if not args.target:
-        parser.error("--target is required unless --update is used.")
+    # ── Handle Health Check ──────────────────────────────────────────────────
+    if args.health:
+        from health import HealthChecker
+        checker = HealthChecker(config)
+        success = checker.run_all()
+        sys.exit(0 if success else 1)
 
-    config = load_config(args.config)
-    validate_config(config)
+    # --target is required if NOT updating or checking health
+    if not args.target:
+        parser.error("--target is required unless --update or --health is used.")
 
     # Apply CLI overrides
     if args.mode:
@@ -117,10 +129,19 @@ def main() -> None:
     if args.ci:
         config['ci']['enabled'] = True
         config['ci']['exit_codes'] = True
+    
+    # New flags for phased workflow and OOB
+    if args.phase:
+        config['scan']['start_phase'] = args.phase
+    if args.oob:
+        # Ensure vuln section exists
+        config.setdefault('tools', {}).setdefault('vuln', {}).setdefault('interactsh', {})
+        config['tools']['vuln']['interactsh']['enabled'] = True
 
     orch = Orchestrator(config)
     try:
-        result = orch.run(target=args.target)
+        # 🔗 High-Performance Async Execution
+        result = asyncio.run(orch.run(target=args.target))
     except KeyboardInterrupt:
         logging.warning("Scan interrupted by user (Ctrl+C).")
         sys.exit(130)

@@ -79,9 +79,8 @@ fi
 if [[ ! -d /opt/waymore ]]; then
     print_status "Installing waymore..."
     git clone https://github.com/xnl-h4ck3r/waymore.git /opt/waymore
-    pip3 install -q -r /opt/waymore/requirements.txt
-    chmod +x /opt/waymore/waymore.py
-    ln -sf /opt/waymore/waymore.py /usr/local/bin/waymore
+    cd /opt/waymore && pip3 install .
+    ln -sf $(which waymore) /usr/local/bin/waymore || true
 fi
 
 if [[ ! -d /opt/NucleiFuzzer ]]; then

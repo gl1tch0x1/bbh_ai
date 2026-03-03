@@ -1,12 +1,7 @@
-import json
-import logging
-import re
-from crewai import Agent, Task, Crew, Process
-from crewai.llm import LLM
-from memory.graph import MemoryGraph
+from typing import Any, Dict, List, Tuple, Optional
 
 # Maps model name prefixes to their provider + config key
-_MODEL_PROVIDER_MAP = [
+_MODEL_PROVIDER_MAP: List[Tuple[Tuple[str, ...], str, str]] = [
     (('gpt-',),               'openai',    'openai_api_key'),
     (('claude-',),            'anthropic', 'anthropic_api_key'),
     (('gemini-',),            'google',    'google_api_key'),
@@ -16,7 +11,7 @@ _MODEL_PROVIDER_MAP = [
 
 
 class AgentController:
-    def __init__(self, config, workspace, telemetry, tool_registry):
+    def __init__(self, config: Dict[str, Any], workspace: Any, telemetry: Any, tool_registry: Any):
         self.config = config
         self.workspace = workspace
         self.telemetry = telemetry
@@ -24,13 +19,13 @@ class AgentController:
         self.memory_graph = MemoryGraph()
         self.logger = logging.getLogger(__name__)
 
-    def _create_llm(self, agent_config):
-        """Resolve LLM provider from model name using a lookup table (not fragile string-in checks)."""
+    def _create_llm(self, agent_config: Dict[str, Any]) -> LLM:
+        """Resolve LLM provider from model name using a lookup table."""
         model = agent_config.get('model', self.config['llm']['default_model'])
         temperature = agent_config.get('temperature', self.config['llm'].get('temperature', 0.2))
 
-        provider = None
-        api_key = None
+        provider: Optional[str] = None
+        api_key: Optional[str] = None
         for prefixes, prov, key_name in _MODEL_PROVIDER_MAP:
             if any(model.startswith(p) for p in prefixes):
                 provider = prov
@@ -53,174 +48,120 @@ class AgentController:
             temperature=temperature,
         )
 
-    def run(self, attack_surface):
-        """Build the multi-agent crew and execute the scan pipeline."""
-        agents = []
-        tasks = []
-        tasks_map = {}  # Explicit task tracking — replaces brittle 'var in locals()' pattern
+    def run(self, attack_surface: Any) -> Dict[str, Any]:
+        """Legacy compatibility method for single-run scans."""
+        return self.run_phase("full", attack_surface)
 
-        agents_cfg = self.config['agents']
-
-        # ── Planner ──────────────────────────────────────────────────────────
-        if agents_cfg.get('planner', {}).get('enabled'):
-            planner = Agent(
-                role='Security Planner',
-                goal='Create a prioritized, step-by-step attack plan based on the attack surface',
-                backstory=(
-                    'You are a senior penetration tester who designs efficient, targeted '
-                    'testing strategies based on discovered assets and technology stacks.'
-                ),
-                tools=self.tool_registry.get_tools('planner'),
-                llm=self._create_llm(agents_cfg['planner']),
-                verbose=True,
-                memory=True,
-            )
-            agents.append(planner)
-            plan_task = Task(
-                description=(
-                    f"Analyze the following attack surface and create a step-by-step testing plan.\n\n"
-                    f"Attack Surface:\n{json.dumps(attack_surface, indent=2)}\n\n"
-                    f"Return a JSON array of tasks with keys: tool_name, args, reason."
-                ),
-                agent=planner,
-                expected_output='A JSON array of tasks with tool_name, args, and reason fields.',
-            )
-            tasks.append(plan_task)
-            tasks_map['plan'] = plan_task
-
-        # ── Recon ─────────────────────────────────────────────────────────────
-        if agents_cfg.get('recon', {}).get('enabled'):
-            recon_agent = Agent(
-                role='Reconnaissance Agent',
-                goal='Enumerate all endpoints, parameters, and hidden assets',
-                backstory=(
-                    'You are an expert recon specialist who discovers attack surface '
-                    'elements that are not immediately visible.'
-                ),
-                tools=self.tool_registry.get_tools('recon'),
-                llm=self._create_llm(agents_cfg['recon']),
-                verbose=True,
-                memory=True,
-            )
-            agents.append(recon_agent)
-            recon_task = Task(
-                description=(
-                    'Execute the recon tasks from the plan. Discover new endpoints, '
-                    'parameters, subdomains, and hidden assets. Update and return the '
-                    'enriched attack surface as JSON.'
-                ),
-                agent=recon_agent,
-                context=[tasks_map['plan']] if 'plan' in tasks_map else [],
-                expected_output='Enriched attack surface JSON with new findings.',
-            )
-            tasks.append(recon_task)
-            tasks_map['recon'] = recon_task
-
-        # ── Exploit ───────────────────────────────────────────────────────────
-        if agents_cfg.get('exploit', {}).get('enabled'):
-            exploit_agent = Agent(
-                role='Vulnerability Testing Agent',
-                goal='Test for vulnerabilities using appropriate security tools and validate findings',
-                backstory=(
-                    'You are a skilled exploit developer who tests for real vulnerabilities '
-                    'methodically, avoiding false positives by verifying each finding.'
-                ),
-                tools=self.tool_registry.get_tools('exploit'),
-                llm=self._create_llm(agents_cfg['exploit']),
-                verbose=True,
-                memory=True,
-            )
-            agents.append(exploit_agent)
-            exploit_task = Task(
-                description=(
-                    'Run exploitation tasks from the recon results. For each potential '
-                    'vulnerability, validate it is exploitable. Return a JSON array of '
-                    'findings with keys: title, severity, location, description, payload, poc_lang, poc.'
-                ),
-                agent=exploit_agent,
-                context=[tasks_map['recon']] if 'recon' in tasks_map else (
-                    [tasks_map['plan']] if 'plan' in tasks_map else []
-                ),
-                expected_output=(
-                    'JSON array of confirmed vulnerabilities, each with: '
-                    'title, severity (critical/high/medium/low/info), location, '
-                    'description, payload, poc_lang, poc.'
-                ),
-            )
-            tasks.append(exploit_task)
-            tasks_map['exploit'] = exploit_task
-
-        # ── Reporter ──────────────────────────────────────────────────────────
-        if agents_cfg.get('reporter', {}).get('enabled'):
-            reporter_agent = Agent(
-                role='Security Reporter',
-                goal='Validate findings, assign CVSS-style severity, and generate PoCs',
-                backstory=(
-                    'You are a professional bug bounty report writer who produces '
-                    'clear, reproducible, and well-structured vulnerability reports.'
-                ),
-                tools=self.tool_registry.get_tools('reporter'),
-                llm=self._create_llm(agents_cfg['reporter']),
-                verbose=True,
-                memory=True,
-            )
-            agents.append(reporter_agent)
-            last_context_key = next(
-                (k for k in ('exploit', 'recon', 'plan') if k in tasks_map), None
-            )
-            report_task = Task(
-                description=(
-                    'Review each finding from the exploitation phase. Validate severity, '
-                    'remove false positives, and write a PoC for each confirmed finding. '
-                    'Return a JSON array with the final validated findings.'
-                ),
-                agent=reporter_agent,
-                context=[tasks_map[last_context_key]] if last_context_key else [],
-                expected_output=(
-                    'Final JSON array of validated findings, each with: '
-                    'title, severity, location, description, payload, poc_lang, poc.'
-                ),
-            )
-            tasks.append(report_task)
-            tasks_map['report'] = report_task
-
-        if not agents:
-            self.logger.error("No agents enabled in config. Nothing to run.")
-            return []
+    def run_phase(self, phase_name: str, context: Dict[str, Any]) -> Any:
+        """Execute a specific phase of the scanning workflow."""
+        self.logger.info(f"AgentController starting phase: {phase_name}")
+        
+        agents: List[Agent] = []
+        tasks: List[Task] = []
+        
+        if phase_name == "discovery":
+            agents, tasks = self._build_discovery_phase(context)
+        elif phase_name == "enrichment":
+            agents, tasks = self._build_enrichment_phase(context)
+        elif phase_name == "web_recon":
+            agents, tasks = self._build_web_recon_phase(context)
+        elif phase_name == "vuln_scan":
+            agents, tasks = self._build_vuln_scan_phase(context)
+        else:
+            self.logger.error(f"Unknown phase: {phase_name}")
+            return {}
 
         crew = Crew(
             agents=agents,
             tasks=tasks,
             process=Process.sequential,
             verbose=True,
-            cache=True,  # Optimisation: reuse results for identical tasks
+            cache=True,
         )
 
-        self.logger.info(f"Starting crew with {len(agents)} agents and {len(tasks)} tasks.")
         result = crew.kickoff()
-        findings = self._extract_findings(result, tasks_map)
+        return self._parse_phase_result(result, phase_name)
 
-        # Store findings summary in memory graph
-        for i, finding in enumerate(findings):
-            self.memory_graph.add_node(f"finding_{i}", finding)
+    def _build_discovery_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+        planner = Agent(
+            role='Discovery Specialist',
+            goal='Identify all basic attack surface assets including domains, subdomains, and related IPs.',
+            backstory='Expert OSINT investigator with deep knowledge in DNS enumeration, WHOIS analysis, and public repository metadata extraction. Your goal is to map the broadest possible attack surface.',
+            tools=self.tool_registry.get_tools('discovery'),
+            llm=self._create_llm(self.config['agents']['planner']),
+        )
+        task = Task(
+            description=f"Perform deep discovery for target: {context.get('target')}. Use subfinder, whois, and OSINT tools to find all related subdomains and IP addresses.",
+            agent=planner,
+            expected_output="A structured list of subdomains and IP addresses found during discovery."
+        )
+        return [planner], [task]
 
-        return findings
+    def _build_enrichment_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+        recon = Agent(
+            role='Enrichment Specialist',
+            goal='Validate subdomains and enrich them with network metadata (DNS, SSL, Open Ports).',
+            backstory='Technical infrastructure auditor. You specialize in verifying asset liveness using dnsx and puredns, and profiling services via nmap and tlsx.',
+            tools=self.tool_registry.get_tools('hosts'),
+            llm=self._create_llm(self.config['agents']['recon']),
+        )
+        task = Task(
+            description=f"Validate these subdomains and identify live hosts: {context.get('subdomains')}. For each live host, perform port scanning and service profiling.",
+            agent=recon,
+            expected_output="A detailed list of live hosts with associated ports, services, and SSL/TLS metadata."
+        )
+        return [recon], [task]
 
-    def _extract_findings(self, result, tasks_map):
+    def _build_web_recon_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+        web_specialist = Agent(
+            role='Web Recon Analyst',
+            goal='Profile web technologies, crawl endpoints, and identify hidden attack surface in web apps.',
+            backstory='Expert in modern web architecture. You excel at fingerprinting tech stacks with CMSeeK and wafw00f, and discovering hidden endpoints via crawling and JS analysis.',
+            tools=self.tool_registry.get_tools('web'),
+            llm=self._create_llm(self.config['agents']['recon']),
+        )
+        task = Task(
+            description=f"Analyze tech stacks and endpoints for live hosts: {context.get('live_hosts')}. Focus on identifying APIs, JS secrets, and hidden web directories.",
+            agent=web_specialist,
+            expected_output="A mapping of URLs to discovered technologies, endpoints, and parsed JavaScript findings."
+        )
+        return [web_specialist], [task]
+
+    def _build_vuln_scan_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+        hacker = Agent(
+            role='Vulnerability Researcher',
+            goal='Identify and validate high-impact vulnerabilities with reproducible PoCs.',
+            backstory='Senior penetration tester specializing in non-intrusive exploit validation. You prioritize finding SQLi, XSS, RCE, and SSRF. You use OOB (Out-of-Band) interactions for maximum blind discovery.',
+            tools=self.tool_registry.get_tools('vuln'),
+            llm=self._create_llm(self.config['agents']['exploit']),
+        )
+        task = Task(
+            description=f"Conduct targeted vulnerability scanning on the attack surface. Use the following context gathered in previous phases: {json.dumps(context)}. Prioritize OOB testing if SSRF or RCE are suspected.",
+            agent=hacker,
+            expected_output="A JSON-formatted array of findings, each including title, severity, location, description, and a reproducible PoC."
+        )
+        return [hacker], [task]
+
+    def _parse_phase_result(self, result: Any, phase_name: str) -> Any:
+        """Standardize the crew output back into a dictionary."""
+        raw = str(result)
+        
+        if phase_name == "vuln_scan":
+            # For vulnerability scanning, we need structured findings
+            return {"findings": self._extract_findings(result)}
+
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {"results": data}
+        except:
+            return {"raw_output": raw}
+
+    def _extract_findings(self, result: Any) -> List[Dict[str, Any]]:
         """
         Parse the final task output into a list of structured finding dicts.
         Tries JSON parse first; falls back to regex extraction.
         """
-        # Prefer the reporter task output; fall back to exploit, then raw result
-        raw = None
-        for key in ('report', 'exploit', 'recon'):
-            if key in tasks_map and hasattr(tasks_map[key], 'output') and tasks_map[key].output:
-                raw = str(tasks_map[key].output)
-                break
-
-        if raw is None:
-            raw = str(result) if result else ''
-
+        raw = str(result) if result else ''
         if not raw.strip():
             self.logger.warning("CrewAI returned empty output — no findings extracted.")
             return []
@@ -230,8 +171,10 @@ class AgentController:
             data = json.loads(raw)
             if isinstance(data, list):
                 return self._normalise_findings(data)
-            elif isinstance(data, dict) and 'findings' in data:
-                return self._normalise_findings(data['findings'])
+            elif isinstance(data, dict):
+                if 'findings' in data and isinstance(data['findings'], list):
+                    return self._normalise_findings(data['findings'])
+                return self._normalise_findings([data])
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -240,26 +183,30 @@ class AgentController:
         if json_match:
             try:
                 data = json.loads(json_match.group())
-                return self._normalise_findings(data)
+                if isinstance(data, list):
+                    return self._normalise_findings(data)
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        self.logger.warning(
-            "Could not parse findings from CrewAI output as JSON. "
-            "Returning raw output as single informational finding."
-        )
+        # Strategy 3: Single finding dict match
+        dict_match = re.search(r'\{.*?\}', raw, re.DOTALL)
+        if dict_match:
+            try:
+                data = json.loads(dict_match.group())
+                return self._normalise_findings([data])
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        self.logger.warning("Could not parse findings as JSON. Returning raw as info.")
         return [{
             'title': 'Unparsed Agent Output',
             'severity': 'info',
             'location': 'N/A',
             'description': raw[:2000],
-            'payload': '',
-            'poc_lang': '',
-            'poc': '',
             'validated': False,
         }]
 
-    def _normalise_findings(self, findings):
+    def _normalise_findings(self, findings: List[Any]) -> List[Dict[str, Any]]:
         """Ensure every finding dict has all required keys with safe defaults."""
         required_keys = {
             'title': 'Unknown Finding',

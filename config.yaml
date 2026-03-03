@@ -30,18 +30,32 @@ agents:
 
 sandbox:
   enabled:       true
-  image:         "bb-sandbox"
-  network:       "none"        # Options: none, bridge, host
-  memory_limit:  "1g"          # RAM limit per sandbox (e.g. 512m, 1g)
-  cpu_limit:     1.0           # CPU core limit (e.g. 0.5, 1.0)
-  ephemeral:     true          # Destroy container after use
+  image:         "bbh-ai-unified"
+  network:       "bridge"       # Changed to bridge to allow tool connectivity
+  memory_limit:  "2g"          # Increased for heavy scans
+  cpu_limit:     2.0           # Increased for multi-threaded tools
+  ephemeral:     true
 
 scan:
-  mode:          "deep"        # quick / deep / stealth
-  threads:       10            # Concurrent tool execution threads
-  rate_limit:    5             # Max tool invocations per second (0 = unlimited)
-  timeout:       60            # Seconds per tool call (used by all wrappers)
-  js_file_limit: 15            # Max JS files to parse per scan (reduces noise/CPU)
+  mode:          "deep"
+  threads:       10
+  rate_limit:    5
+  timeout:       300           # Increased for OSINT and Vuln scans
+  js_file_limit: 25
+
+tools:
+  osint:
+    whois: {}
+    emailfinder: {}
+  github:
+    token: "${GITHUB_TOKEN}"
+  subdomains:
+    puredns:
+      resolvers: "/app/resolvers.txt"
+  vuln:
+    interactsh:
+      server: "interact.sh"
+      # token: "" # Add token if using a private server
 
 reporting:
   formats:            ["markdown", "json", "csv"]

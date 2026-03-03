@@ -13,14 +13,26 @@ logging.basicConfig(level=logging.INFO)
 TOOLS_PATH = "/app/tools/wrappers"
 
 def load_tool(tool_name):
-    module_path = os.path.join(TOOLS_PATH, f"{tool_name}.py")
-    if not os.path.exists(module_path):
+    target_file = f"{tool_name}.py"
+    module_path = None
+    
+    # Recursively search for the tool wrapper
+    for root, dirs, files in os.walk(TOOLS_PATH):
+        if target_file in files:
+            module_path = os.path.join(root, target_file)
+            break
+            
+    if not module_path or not os.path.exists(module_path):
         return None
+        
     spec = importlib.util.spec_from_file_location(tool_name, module_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    class_name = f"{tool_name.title().replace('_', '')}Tool"
+    
+    # Handle cases like postleaks-ng -> PostleaksNgTool
+    class_name = "".join(x.title() for x in tool_name.replace('-', '_').split('_')) + "Tool"
     tool_class = getattr(module, class_name, None)
+    
     if tool_class:
         return tool_class(config={}, workspace=None, telemetry=None)
     return None
