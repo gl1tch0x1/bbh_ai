@@ -167,6 +167,10 @@ python main.py --target example.com --phase C
 # Explicitly enable Out-of-Band testing
 python main.py --target example.com --oob
 
+# Distributed Scanning (Redis + Celery)
+docker-compose up -d --build
+python main.py --target example.com --distributed
+
 # Update BBH-AI from GitHub
 python main.py -u
 ```
@@ -286,7 +290,8 @@ graph LR
 | 📡 **Out-of-Band** | `interactsh` integration for blind vulnerabilities |
 | 🌐 **Dashboard** | Real-time React/Next.js scan monitoring UI |
 | 🗄️ **Storage** | PostgreSQL/Elasticsearch for historical scan data |
-| 🚀 **Scale** | Redis/Celery queue-based distributed scanning |
+| 🚀 **Scale** | Redis/Celery queue-based distributed scanning (Complete) |
+| ⚙️ **Optimization** | Ultra-optimized for local peak performance (Complete) |
 
 ---
 

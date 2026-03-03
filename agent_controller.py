@@ -3,6 +3,16 @@ import json
 import re
 from typing import Any, Dict, List, Tuple, Optional
 
+# CrewAI & Memory Imports
+try:
+    from crewai import Agent, Task, Crew, Process
+    from langchain_openai import ChatOpenAI as LLM # or whatever model wrapper is used
+except ImportError:
+    # Fallback or handled at runtime
+    pass
+
+from memory.graph import MemoryGraph
+
 # Maps model name prefixes to their provider + config key
 _MODEL_PROVIDER_MAP: List[Tuple[Tuple[str, ...], str, str]] = [
     (('gpt-',),               'openai',    'openai_api_key'),
@@ -19,7 +29,11 @@ class AgentController:
         self.workspace = workspace
         self.telemetry = telemetry
         self.tool_registry = tool_registry
-        self.memory_graph = MemoryGraph()
+        
+        # Initialize MemoryGraph with persistence
+        graph_path = Path(workspace) / "memory_graph.json" if workspace else None
+        self.memory_graph = MemoryGraph(graph_path)
+        
         self.logger = logging.getLogger(__name__)
 
     def _create_llm(self, agent_config: Dict[str, Any]) -> LLM:
@@ -59,6 +73,16 @@ class AgentController:
         """Execute a specific phase of the scanning workflow."""
         self.logger.info(f"AgentController starting phase: {phase_name}")
         
+        # Merge persistent memory into context if data is missing
+        if phase_name == "enrichment" and not context.get('subdomains'):
+            context['subdomains'] = [n['value'] for _, n in self.memory_graph.query(type='subdomain')]
+        if phase_name == "web_recon" and not context.get('live_hosts'):
+            context['live_hosts'] = [n['value'] for _, n in self.memory_graph.query(type='live_host')]
+        if phase_name == "vuln_scan":
+            # Vuln scan needs full context, pulling all known assets
+            context['subdomains'] = [n['value'] for _, n in self.memory_graph.query(type='subdomain')]
+            context['live_hosts'] = [n['value'] for _, n in self.memory_graph.query(type='live_host')]
+        
         agents: List[Agent] = []
         tasks: List[Task] = []
         
@@ -83,6 +107,10 @@ class AgentController:
         )
 
         result = crew.kickoff()
+        
+        # Persist memory after phase completion
+        self.memory_graph.save()
+        
         return self._parse_phase_result(result, phase_name)
 
     def _build_discovery_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
@@ -155,7 +183,18 @@ class AgentController:
 
         try:
             data = json.loads(raw)
-            return data if isinstance(data, dict) else {"results": data}
+            parsed = data if isinstance(data, dict) else {"results": data}
+            
+            # Store results in MemoryGraph for cross-worker persistence
+            if phase_name == "discovery" and "subdomains" in parsed:
+                for sub in parsed["subdomains"]:
+                    self.memory_graph.add_node(f"sub:{sub}", {"type": "subdomain", "value": sub})
+            if phase_name == "enrichment" and "live_hosts" in parsed:
+                for host in parsed["live_hosts"]:
+                    self.memory_graph.add_node(f"host:{host}", {"type": "live_host", "value": host})
+            
+            self.memory_graph.save()
+            return parsed
         except:
             return {"raw_output": raw}
 

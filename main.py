@@ -94,6 +94,7 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="Enable debug-level logging")
     parser.add_argument("--health",  action="store_true", help="Run system health diagnostic and tools verification")
     parser.add_argument("--update", "-u", action="store_true", help="Check for and install updates from GitHub")
+    parser.add_argument("--distributed", action="store_true", help="Enable distributed scanning via Redis/Celery")
     args = parser.parse_args()
 
     setup_logging(logging.DEBUG if args.verbose else logging.INFO)
@@ -129,6 +130,8 @@ def main() -> None:
     if args.ci:
         config['ci']['enabled'] = True
         config['ci']['exit_codes'] = True
+    if args.distributed:
+        config.setdefault('scan', {})['mode'] = 'distributed'
     
     # New flags for phased workflow and OOB
     if args.phase:

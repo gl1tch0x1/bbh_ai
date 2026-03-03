@@ -4,6 +4,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
+import json
+
+# Celery for distributed scanning
+try:
+    from celery import group, chain
+    from tasks.recon_tasks import subfinder_task, httpx_task
+    from tasks.vuln_tasks import nuclei_task
+    from tasks.report_tasks import aggregate_report_task
+    from tasks.phase_tasks import discovery_phase_task, enrichment_phase_task, web_recon_phase_task, vuln_scan_phase_task
+    CELERY_AVAILABLE = True
+except ImportError:
+    CELERY_AVAILABLE = False
 
 if TYPE_CHECKING:
     from telemetry.logger import Telemetry
@@ -78,10 +90,13 @@ class Orchestrator:
             start_idx = phases.index(start_phase)
         except ValueError:
             start_idx = 0
-        
+            
         current_phases = phases[start_idx:]
 
         try:
+            if self.config.get('scan', {}).get('mode') == 'distributed' and CELERY_AVAILABLE:
+                return await self.run_distributed(target)
+
             # Phase A: Discovery
             if "A" in current_phases:
                 state["phase_data"]["A"] = await self._run_phase_a(target)
@@ -132,6 +147,38 @@ class Orchestrator:
             self.telemetry.save()
             duration = time.time() - start_time
             self.logger.info(f"🏁 [ORCHESTRATOR] Scan complete. Duration: {duration:.2f}s")
+
+    async def run_distributed(self, target: str) -> ScanResult:
+        """Execute the full phased workflow via Celery workers."""
+        self.logger.info(f"🌐 [ORCHESTRATOR] Starting DISTRIBUTED Scan for: {target}")
+        
+        # 1. Define the High-IQ Distributed Chain
+        # This mirrors the A-E phased workflow using Celery tasks
+        workflow = chain(
+            discovery_phase_task.si(self.run_id, target, self.config),
+            enrichment_phase_task.si(self.run_id, [], self.config), 
+            web_recon_phase_task.si(self.run_id, [], self.config),
+            vuln_scan_phase_task.si(self.run_id, {"target": target}, self.config),
+            aggregate_report_task.si(self.run_id, self.config, target)
+        )
+        
+        job = workflow.apply_async()
+        self.logger.info(f"🌐 [ORCHESTRATOR] Distributed Workflow Dispatched. Job ID: {job.id}")
+        
+        # Wait for completion (poll)
+        final_result = await self._wait_for_job(job)
+        
+        return ScanResult(
+            findings=final_result.get('total_findings', []),
+            report_path=final_result.get('report_paths', {}),
+            exit_code=0
+        )
+
+    async def _wait_for_job(self, job):
+        """Poll celery for job completion."""
+        while not job.ready():
+            await asyncio.sleep(2)
+        return job.get()
 
     async def _run_phase_a(self, target: str) -> Dict[str, Any]:
         self.logger.info("--- [Phase A: Discovery (OSINT & Subdomains)] ---")

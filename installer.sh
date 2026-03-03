@@ -33,7 +33,8 @@ fi
 
 print_status "Installing system dependencies..."
 apt-get install -yqq git curl wget make gcc libpcap-dev libssl-dev python3 python3-pip \
-               python3-venv jq parallel nmap masscan dnsutils unzip docker.io
+               python3-venv jq parallel nmap masscan dnsutils unzip docker.io redis-server
+systemctl enable redis-server --now
 
 if ! command -v go &> /dev/null; then
     print_status "Installing Go..."

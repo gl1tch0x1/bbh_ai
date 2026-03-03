@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: bbh-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker-recon:
+    build: .
+    container_name: bbh-worker-recon
+    command: celery -A celery_app.celery worker -Q recon -c 4 --loglevel=info
+    volumes:
+      - ./runs:/app/runs
+      - ./config.yaml:/app/config.yaml
+      - ./.env:/app/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+
+  worker-exploit:
+    build: .
+    container_name: bbh-worker-exploit
+    command: celery -A celery_app.celery worker -Q exploit -c 2 --loglevel=info
+    volumes:
+      - ./runs:/app/runs
+      - ./config.yaml:/app/config.yaml
+      - ./.env:/app/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+
+  app:
+    build: .
+    container_name: bbh-app
+    command: python main.py --target example.com --distributed
+    volumes:
+      - ./runs:/app/runs
+      - ./config.yaml:/app/config.yaml
+      - ./.env:/app/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1

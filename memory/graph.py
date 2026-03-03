@@ -9,11 +9,15 @@ class MemoryGraph:
     discovered assets, findings, and agents during a scan session.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, filepath: Optional[Path] = None) -> None:
         self.nodes: Dict[str, Dict[str, Any]] = {}      # node_id → data dict
         self.edges: List[Tuple[str, str, str]] = []     # (from_id, to_id, relation)
-        self._index: Dict[str, Set[str]] = defaultdict(set) # key:value → set of node_ids
+        self._index: Dict[str, Set[str]] = defaultdict(set)
+        self.filepath = filepath
         self.logger = logging.getLogger(__name__)
+        
+        if self.filepath and self.filepath.exists():
+            self.load()
 
     def add_node(self, node_id: str, data: Dict[str, Any]) -> None:
         """Add or update a node. Automatically indexes all key-value pairs."""
@@ -67,3 +71,43 @@ class MemoryGraph:
     def summary(self) -> Dict[str, int]:
         """Return a statistical summary of the graph state."""
         return {"nodes": len(self.nodes), "edges": len(self.edges)}
+
+    def save(self) -> None:
+        """Persist the graph to the filesystem."""
+        if not self.filepath:
+            return
+        
+        # Convert sets in _index to lists for JSON serialization
+        index_serializable = {k: list(v) for k, v in self._index.items()}
+        
+        data = {
+            "nodes": self.nodes,
+            "edges": self.edges,
+            "index": index_serializable
+        }
+        
+        import json
+        with open(self.filepath, "w") as f:
+            json.dump(data, f)
+        self.logger.debug(f"MemoryGraph saved to {self.filepath}")
+
+    def load(self) -> None:
+        """Load the graph from the filesystem."""
+        if not self.filepath or not self.filepath.exists():
+            return
+
+        import json
+        try:
+            with open(self.filepath, "r") as f:
+                data = json.load(f)
+                self.nodes = data.get("nodes", {})
+                self.edges = [tuple(e) for e in data.get("edges", [])]
+                
+                # Rebuild index from lists to sets
+                raw_index = data.get("index", {})
+                self._index = defaultdict(set)
+                for k, v in raw_index.items():
+                    self._index[k] = set(v)
+            self.logger.debug(f"MemoryGraph loaded from {self.filepath}")
+        except Exception as e:
+            self.logger.error(f"Failed to load MemoryGraph: {e}")
