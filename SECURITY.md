@@ -45,7 +45,7 @@ Instead:
 1. Email the maintainers privately at:
 
    ```
-   security@yourprojectdomain.com
+   mraashish0x1@duck.com
    ```
 2. Include:
 
