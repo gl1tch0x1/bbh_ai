@@ -51,6 +51,9 @@ RUN git clone https://github.com/cramppet/regulator && \
 RUN git clone https://github.com/JosueEncinar/AnalyticsRelationships && \
     ln -s /opt/AnalyticsRelationships/analyticsrelationships.py /usr/local/bin/analyticsrelationships
 
+RUN git clone https://github.com/xnl-h4ck3r/waymore.git /opt/waymore && \
+    cd /opt/waymore && pip install .
+
 # App setup
 WORKDIR /app
 COPY sandbox/server.py /app/server.py
