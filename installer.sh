@@ -54,8 +54,8 @@ tools=(
     "github.com/lc/gau/v2/cmd/gau@latest"
     "github.com/hahwul/dalfox/v2@latest"
     "github.com/jaeles-project/gospider@latest"
-    "github.com/OWASP/Amass/v3/...@master"
     "github.com/owasp-amass/amass/v4/...@latest"
+    "github.com/intigriti/misconfig-mapper/cmd/misconfig-mapper@latest"
     "github.com/ffuf/ffuf@latest"
 )
 for tool in "${tools[@]}"; do

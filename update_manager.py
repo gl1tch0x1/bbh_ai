@@ -150,7 +150,8 @@ class UpdateManager:
                 "github.com/hahwul/dalfox/v2@latest",
                 "github.com/jaeles-project/gospider@latest",
                 "github.com/ffuf/ffuf@latest",
-                "github.com/owasp-amass/amass/v4/...@latest"
+                "github.com/owasp-amass/amass/v4/...@latest",
+                "github.com/intigriti/misconfig-mapper/cmd/misconfig-mapper@latest"
             ]
             
             for tool in go_tools:
