@@ -55,23 +55,54 @@ class UpdateManager:
             return False
 
     def _git_pull(self):
-        logger.info("Pulling latest code from origin...")
+        logger.info("Synchronizing with remote repository...")
         try:
+            # Check for local changes
+            has_changes = self._has_local_changes()
+            if has_changes:
+                logger.info("Local changes detected. Stashing temporarily...")
+                subprocess.run(["git", "stash"], cwd=self.root_dir, check=False)
+
+            # Detect current branch to pull correctly
+            branch_res = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=self.root_dir, capture_output=True, text=True, check=False
+            )
+            current_branch = branch_res.stdout.strip() or "main"
+            
+            logger.info(f"Pulling latest changes for branch: {current_branch}...")
             result = subprocess.run(
-                ["git", "pull", "origin", "main"],
+                ["git", "pull", "origin", current_branch, "--rebase"],
                 cwd=self.root_dir,
                 capture_output=True,
                 text=True,
                 check=False
             )
+
+            if has_changes:
+                logger.info("Restoring local changes from stash...")
+                subprocess.run(["git", "stash", "pop"], cwd=self.root_dir, check=False)
+
             if result.returncode != 0:
                 logger.error(f"git pull error: {result.stderr.strip()}")
                 return False
-            logger.info(result.stdout.strip())
+            
+            logger.info("Source code updated successfully.")
             return True
         except Exception as e:
             logger.error(f"Exception during git pull: {e}")
             return False
+
+    def _has_local_changes(self):
+        """Check if there are any uncommitted changes in the repository."""
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=self.root_dir,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        return bool(result.stdout.strip())
 
     def _update_dependencies(self):
         req_file = os.path.join(self.root_dir, "requirements.txt")
