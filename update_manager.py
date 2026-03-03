@@ -149,7 +149,8 @@ class UpdateManager:
                 "github.com/lc/gau/v2/cmd/gau@latest",
                 "github.com/hahwul/dalfox/v2@latest",
                 "github.com/jaeles-project/gospider@latest",
-                "github.com/ffuf/ffuf@latest"
+                "github.com/ffuf/ffuf@latest",
+                "github.com/owasp-amass/amass/v4/...@latest"
             ]
             
             for tool in go_tools:

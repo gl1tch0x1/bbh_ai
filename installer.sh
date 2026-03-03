@@ -55,6 +55,7 @@ tools=(
     "github.com/hahwul/dalfox/v2@latest"
     "github.com/jaeles-project/gospider@latest"
     "github.com/OWASP/Amass/v3/...@master"
+    "github.com/owasp-amass/amass/v4/...@latest"
     "github.com/ffuf/ffuf@latest"
 )
 for tool in "${tools[@]}"; do
@@ -86,8 +87,8 @@ fi
 if [[ ! -d /opt/NucleiFuzzer ]]; then
     print_status "Installing NucleiFuzzer..."
     git clone https://github.com/0xKayala/NucleiFuzzer.git /opt/NucleiFuzzer
-    chmod +x /opt/NucleiFuzzer/nf.sh
-    ln -sf /opt/NucleiFuzzer/nf.sh /usr/local/bin/nf
+    cd /opt/NucleiFuzzer && chmod +x install.sh && ./install.sh
+    ln -sf /usr/local/bin/nf /usr/bin/nf 2>/dev/null || true
 fi
 
 print_status "Setting up gf patterns..."
