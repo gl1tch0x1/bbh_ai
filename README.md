@@ -12,105 +12,32 @@
 
 | Feature | Detail |
 |---------|--------|
-| 🤖 **Multi-Agent Orchestration** | Planner → Recon → Exploit → Reporter pipeline |
-| 🧠 **LLM Flexibility** | OpenAI, Anthropic, Google Gemini, DeepSeek |
-| 🔒 **Sandboxed Execution** | Dangerous tools run inside isolated Docker containers |
-| 🛠️ **11 Integrated Tools** | subfinder, httpx, gau, katana, gospider, nuclei, dalfox, waymore, js_parser, tech_detect + more |
-| 📄 **Multi-Format Reports** | Markdown, JSON, CSV with severity tables and PoC blocks |
-| 🔁 **CI/CD Ready** | Exit codes (0/1/2), Slack notifications, GitHub Issue creation |
-| 🔌 **Extensible** | Drop a new `.py` file in `tools/wrappers/` — registry auto-loads it |
-| 🗺️ **Memory Graph** | In-session knowledge graph tracks asset relationships across agents |
-| 🔑 **`.env` Support** | Store all API keys in `.env` — never hardcode credentials |
+| 🤖 **A-E Phased Orchestration** | Discovery → Enrichment → Web Recon → Vuln Scan → Reporting |
+| 🛡️ **OOB / Blind Detection** | Integrated `interactsh` for DNS/HTTP interaction analysis |
+| 🔒 **Advanced Sandboxing** | Unified Docker environment with resource-limited tool execution |
+| 🛠️ **40+ Integrated Tools** | OSINT, API Leaks, GitHub, Cloud, Subdomains, Hosts, Web & Vuln |
+| 📄 **Intelligent Correlation** | Multi-agent synthesis removes false positives and assigns risk |
+| � **Modular CLI** | Run full scans or target specific phases (`--phase B`) |
+| � **Deep Visibility** | Telemetry logs for every tool call and agent decision |
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture: A-E Phased Workflow
+
+BBH-AI now follows a mature, sequential orchestration pipeline to ensure maximum data enrichment and minimal noise.
 
 ```mermaid
-graph TB
-    CLI["🖥️ main.py\n(CLI Entry Point)"]
-    ENV["📄 .env\n(API Keys)"]
-    CFG["⚙️ config.yaml\n(Settings)"]
+graph TD
+    A["Phase A: Discovery\n(OSINT & Subdomains)"]
+    B["Phase B: Enrichment\n(DNS & Host Probing)"]
+    C["Phase C: Web Recon\n(JS Analysis & Tech Stacks)"]
+    D["Phase D: Vuln Scan\n(Exploits & OOB)"]
+    E["Phase E: Correlation\n(Final Report)"]
 
-    CLI --> ENV
-    CLI --> CFG
-    CLI --> ORCH
-
-    subgraph ORCH["🎛️ Orchestrator"]
-        direction TB
-        VAL_ENV["validate_env()"]
-        PREP["_prepare_target()"]
-        RUN["agent_controller.run()"]
-        REPORT["ReportGenerator"]
-        NOTIFY["CINotifier"]
-        TEL["Telemetry.save()"]
-    end
-
-    PREP --> TOOLS
-    RUN --> AGENTS
-
-    subgraph TOOLS["🧰 Tool Registry (Categorized)"]
-        direction LR
-        subgraph SUB["Subdomains"]
-            SF["subfinder"]
-        end
-        subgraph HST["Hosts"]
-            HX["httpx"]
-        end
-        subgraph OSN["OSINT"]
-            GAU["gau"]
-            WM["waymore"]
-        end
-        subgraph WEB["Web Analysis"]
-            GS["gospider"]
-            JS["js_parser"]
-            KAT["katana"]
-            TD["tech_detect"]
-        end
-        subgraph VLN["Vuln Checkers"]
-            NC["nuclei"]
-            DF["dalfox"]
-        end
-    end
-
-    subgraph AGENTS["🤖 CrewAI Agent Pipeline"]
-        direction LR
-        PL["🧭 Planner\n(gpt-4)"]
-        RC["🔍 Recon\n(gpt-3.5-turbo)"]
-        EX["💥 Exploit\n(gpt-4)"]
-        RP["📝 Reporter\n(gpt-4)"]
-        PL --> RC --> EX --> RP
-    end
-
-    subgraph SANDBOX["🐳 Docker Sandbox"]
-        direction TB
-        SC["SandboxClient"]
-        SV["FastAPI Server\n(:8000)"]
-        SC --> SV
-    end
-
-    TOOLS --> SANDBOX
-    AGENTS --> VALID
-
-    subgraph VALID["✅ Validation"]
-        VL["Validator\n(normalise + deduplicate)"]
-        MG["MemoryGraph\n(in-session knowledge)"]
-    end
-
-    VALID --> REPORT
-    REPORT --> OUT
-
-    subgraph OUT["📦 Output — runs/run_YYYYMMDD_HHMMSS/"]
-        direction LR
-        MD["report.md"]
-        JS2["report.json"]
-        CSV["report.csv"]
-        TJ["telemetry.json"]
-    end
-
-    REPORT --> NOTIFY
-    NOTIFY --> SLACK["💬 Slack Webhook"]
-    NOTIFY --> GH["🐙 GitHub Issues"]
+    A -->|Subdomains/IPs| B
+    B -->|Live Hosts/Ports| C
+    C -->|Endpoints/API Docs| D
+    D -->|Validated Vulns| E
 ```
 
 ---
@@ -231,75 +158,42 @@ nano config.yaml                  # adjust scan mode, threads, etc.
 ## 🖥️ Usage
 
 ```bash
-# Standard deep scan
+# Full A-E Scan (Deep Mode)
 python main.py --target example.com --mode deep
 
+# Start from Web Recon (Phase C)
+python main.py --target example.com --phase C
+
+# Explicitly enable Out-of-Band testing
+python main.py --target example.com --oob
+
 # Update BBH-AI from GitHub
-python main.py --update
-
-# Quick scan with debug output
-python main.py --target example.com --mode quick --verbose
-
-# CI mode — exits with code 0 (clean), 1 (critical), 2 (high)
-python main.py --target example.com --ci
-
-# Stealth mode (slower, lower rate-limit)
-python main.py --target example.com --mode stealth
+python main.py -u
 ```
 
 ### CLI Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--target` | *(required)* | Domain or URL to scan |
-| `--config` | `config.yaml` | Path to config file |
-| `--mode` | from config | `quick` / `deep` / `stealth` |
-| `--ci` | `false` | CI mode: structured exit codes + notifications |
-| `--verbose` | `false` | Enable DEBUG-level logging |
-| `--update`, `-u` | `false` | Auto-update from GitHub + update dependencies |
+| Flag | Description |
+|------|-------------|
+| `--target` | Target domain or URL |
+| `--phase [A-E]` | Run scan starting from a specific phase |
+| `--oob` | Explicitly enable OOB (`interactsh`) interaction testing |
+| `--mode [quick/deep]`| Override scan thoroughness |
+| `--ci` | Enable CI mode (Slack/GitHub/No Prompts) |
 
 ---
 
-## 📦 Output
+## 🧰 Tool Reference (Matrix)
 
-All results are saved to `runs/run_YYYYMMDD_HHMMSS/`:
-
-```
-runs/
-└── run_20260302_201835/
-    ├── report.md          ← Human-readable Markdown summary
-    ├── report.json        ← Machine-readable structured data
-    ├── report.csv         ← Spreadsheet-compatible export
-    ├── telemetry.json     ← Tool timing, errors, agent logs
-    └── subs_for_httpx.txt ← Intermediate recon data
-```
-
-### Exit Codes (CI mode)
-
-| Code | Meaning |
-|------|---------|
-| `0` | No findings, or only medium/low severity |
-| `1` | At least one **critical** finding |
-| `2` | At least one **high** finding (no critical) |
-| `130` | Interrupted by user (Ctrl+C) |
-| `3` | Unexpected fatal error |
-
----
-
-## 🧰 Tool Reference
-
-| Tool | Category | Description |
-|------|----------|-------------|
-| `subfinder` | recon | Passive subdomain enumeration |
-| `httpx` | recon | HTTP probing, tech detection, status codes |
-| `gau` | recon | Fetch known URLs from AlienVault, Wayback, etc. |
-| `katana` | recon | Active web crawler with JS parsing |
-| `gospider` | recon | Spider + sitemap/robots.txt discovery |
-| `waymore` | recon | Extended Wayback Machine URL collector |
-| `js_parser` | recon | Extracts endpoints from JavaScript files |
-| `tech_detect` | recon | Technology fingerprinting via Wappalyzer |
-| `nuclei` | exploit/recon | Template-based vulnerability scanner |
-| `dalfox` | exploit | XSS parameter scanner |
+| Category | Tools | Description |
+|----------|-------|-------------|
+| **OSINT** | `whois`, `emailfinder`, `LeakSearch`, `msftrecon` | Identity and leak discovery |
+| **Subdomains** | `subfinder`, `dnsx`, `puredns`, `urlfinder`, `gotator` | Massive asset mapping |
+| **API Leaks** | `porch-pirate`, `SwaggerSpy`, `postleaks-ng` | API endpoint auditing |
+| **GitHub** | `enumerepo`, `trufflehog`, `gitleaks`, `noseyparker` | Secret and repo analysis |
+| **Cloud** | `cloud_enum`, `misconfig-mapper` | AWS/Azure/GCP misconfig detection |
+| **Host/Web** | `nmap`, `wafw00f`, `CMSeeK`, `vhostfinder`, `httpx` | Infrastructure and CMS profiling |
+| **Vuln/OOB** | `nuclei`, `sqlmap`, `testssl`, `interactsh` | Active exploitation & OOB |
 
 ---
 

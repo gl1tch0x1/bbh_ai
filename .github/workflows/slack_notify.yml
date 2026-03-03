@@ -1,0 +1,17 @@
+name: Slack Notification
+on: [push]  # Triggers on every push
+
+jobs:
+  notify-slack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send notification to Slack
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          # This references the secret you created in GitHub settings
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "íº€ *Build Notification*\n*Repository:* ${{ github.repository }}\n*Status:* ${{ job.status }}\n*Branch:* ${{ github.ref_name }}"
+            }
