@@ -138,6 +138,7 @@ class UpdateManager:
             logger.warning("Go is not installed. Skipping Go-based tool updates.")
         else:
             # Go tools
+            subprocess.run(["go", "clean", "-modcache"], check=False)
             go_tools = [
                 "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
                 "github.com/projectdiscovery/httpx/cmd/httpx@latest",

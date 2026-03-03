@@ -44,6 +44,7 @@ if ! grep -q '~/go/bin' ~/.bashrc; then
 fi
 
 print_status "Installing/updating Go tools..."
+go clean -modcache || true
 tools=(
     "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
     "github.com/projectdiscovery/httpx/cmd/httpx@latest"
@@ -107,7 +108,14 @@ systemctl enable docker --now
 
 if [[ -f sandbox/Dockerfile.sandbox ]]; then
     print_status "Building sandbox Docker image..."
-    docker build -t bbh-sandbox -f sandbox/Dockerfile.sandbox .
+    # Attempt to fix Docker DNS/IPv6 issues if pull fails
+    if ! docker pull python:3.11-slim --quiet &>/dev/null; then
+        print_status "Initial Docker pull failed. Attempting to configure DNS fallback..."
+        mkdir -p /etc/docker
+        echo '{"dns": ["8.8.8.8", "1.1.1.1"]}' > /etc/docker/daemon.json
+        systemctl restart docker
+    fi
+    docker build --network=host -t bbh-sandbox -f sandbox/Dockerfile.sandbox .
 else
     print_warning "sandbox/Dockerfile.sandbox not found. Skipping Docker image build."
 fi
