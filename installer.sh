@@ -19,11 +19,20 @@ if [[ ! -f "config.yaml" ]]; then
     exit 1
 fi
 
-print_status "Updating package lists..."
-apt update -y && apt upgrade -y
+print_status "Checking package lists (skipping if updated in last 24h)..."
+APT_CACHE_TIME=86400
+LAST_UPDATE=$(stat -c %Y /var/lib/apt/periodic/update-success-stamp 2>/dev/null || echo 0)
+NOW=$(date +%s)
+
+if (( NOW - LAST_UPDATE > APT_CACHE_TIME )); then
+    print_status "Updating package lists..."
+    apt-get update -yqq && apt-get upgrade -yqq
+else
+    print_success "Package lists are current (updated within last 24h)."
+fi
 
 print_status "Installing system dependencies..."
-apt install -y git curl wget make gcc libpcap-dev libssl-dev python3 python3-pip \
+apt-get install -yqq git curl wget make gcc libpcap-dev libssl-dev python3 python3-pip \
                python3-venv jq parallel nmap masscan dnsutils unzip docker.io
 
 if ! command -v go &> /dev/null; then
