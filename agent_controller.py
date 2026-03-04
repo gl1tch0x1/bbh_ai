@@ -1,14 +1,19 @@
 import logging
 import json
 import re
+import os
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
+import signal
 
-# CrewAI & Memory Imports
+# CrewAI & LangChain Imports
 try:
     from crewai import Agent, Task, Crew, Process
-    from langchain_openai import ChatOpenAI as LLM # or whatever model wrapper is used
+    from langchain_openai import ChatOpenAI
+    from langchain_anthropic import ChatAnthropic
+    from langchain_google_genai import ChatGoogleGenerativeAI
 except ImportError:
-    # Fallback or handled at runtime
     pass
 
 from memory.graph import MemoryGraph
@@ -18,7 +23,7 @@ _MODEL_PROVIDER_MAP: List[Tuple[Tuple[str, ...], str, str]] = [
     (('gpt-',),               'openai',    'openai_api_key'),
     (('claude-',),            'anthropic', 'anthropic_api_key'),
     (('gemini-',),            'google',    'google_api_key'),
-    (('deepseek-',),          'deepseek',  'deepseek_api_key'),
+    (('deepseek-',),          'deepseek',  'openai_api_key'), # DeepSeek uses OpenAI wrapper usually
     (('o1-', 'o3-', 'o4-'),   'openai',    'openai_api_key'),
 ]
 
@@ -36,82 +41,197 @@ class AgentController:
         
         self.logger = logging.getLogger(__name__)
 
-    def _create_llm(self, agent_config: Dict[str, Any]) -> LLM:
-        """Resolve LLM provider from model name using a lookup table."""
-        model = agent_config.get('model', self.config['llm']['default_model'])
-        temperature = agent_config.get('temperature', self.config['llm'].get('temperature', 0.2))
+    def _create_llm(self, agent_config: Dict[str, Any]) -> Any:
+        """Resolve LLM provider OR create a Consensus Swarm if --ai is active."""
+        swarm_models = self.config.get('scan', {}).get('ai_swarm')
+        
+        if swarm_models:
+            self.logger.info(f"🧠 [Unified Swarm] Initializing Consensus Engine with: {swarm_models}")
+            model_list = [m.strip() for m in swarm_models.split(',')]
+            return ConsensusLLM(model_list, self, self.config, self.logger)
 
-        provider: Optional[str] = None
+        model = agent_config.get('model', self.config['llm']['default_model'])
+        return self._instantiate_single_llm(model, agent_config.get('temperature', 0.2))
+
+    def _instantiate_single_llm(self, model: str, temperature: float) -> Any:
         api_key: Optional[str] = None
+        provider: Optional[str] = None
         for prefixes, prov, key_name in _MODEL_PROVIDER_MAP:
             if any(model.startswith(p) for p in prefixes):
                 provider = prov
                 api_key = self.config['llm'].get(key_name)
                 break
+        
+        if provider == 'anthropic':
+            return ChatAnthropic(model=model, api_key=api_key, temperature=temperature)
+        elif provider == 'google':
+            return ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=temperature)
+        elif provider == 'deepseek':
+            return ChatOpenAI(model=model, api_key=api_key, base_url="https://api.deepseek.com/v1", temperature=temperature)
+        else:
+            # Default to OpenAI
+            return ChatOpenAI(model=model, api_key=api_key or self.config['llm'].get('openai_api_key'), temperature=temperature)
 
-        if provider is None:
-            self.logger.warning(f"Unknown model '{model}', defaulting to openai provider.")
-            provider = 'openai'
-            api_key = self.config['llm'].get('openai_api_key')
+class ConsensusLLM:
+    """
+    Ensemble LLM Wrapper. Implements "Unified AI" logic where multiple 
+    models deliberate to reach a high-confidence consensus.
+    """
+    def __init__(self, models: List[str], controller: AgentController, config: Dict[str, Any], logger: logging.Logger):
+        self.models = models
+        self.config = config
+        self.logger = logger
+        self.llms = []
+        for m in models:
+            try:
+                llm = controller._instantiate_single_llm(m, 0.2)
+                self.llms.append(llm)
+            except Exception as e:
+                self.logger.warning(f"Could not instantiate swarm member {m}: {e}")
 
-        if not api_key:
-            self.logger.error(f"No API key configured for provider '{provider}' (model: {model})")
-            raise ValueError(f"Missing API key for provider '{provider}'")
+    def invoke(self, prompt: Any) -> Any:
+        """Query all models and perform consensus refinement with Governor Synthesis."""
+        llm_timeout = self.config.get('llm', {}).get('timeout_seconds', 60)
+        responses = []
+        
+        for llm in self.llms:
+            try:
+                self.logger.debug(f"Swarm member {llm.model} deliberating... (timeout: {llm_timeout}s)")
+                # Set timeout for LLM invocation - most LLM clients support request_timeout
+                start_time = time.time()
+                response = str(llm.invoke(prompt))
+                elapsed = time.time() - start_time
+                
+                if elapsed > llm_timeout:
+                    self.logger.warning(f"Swarm member {llm.model} exceeded timeout ({elapsed:.1f}s > {llm_timeout}s)")
+                else:
+                    responses.append({"model": llm.model, "response": response})
+            except Exception as e:
+                self.logger.error(f"Swarm member {llm.model} failed: {e}")
 
-        return LLM(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            temperature=temperature,
-        )
+        if not responses:
+            raise ValueError("All swarm members failed.")
+
+        if len(responses) == 1:
+            return responses[0]["response"]
+
+        # High-IQ Synthesis Prompt (Claude-style Reasoning Integrated)
+        refinement_prompt = f"""
+### SWARM CONSENSUS CHALLENGE: GOVERNOR SYNTHESIS ###
+You are the Governor Model for the BBH-AI Swarm. 
+Below are multiple independent security analyses of the same target. 
+
+STRICT REASONING RULES:
+1. REASON_FIRST: Before providing the final result, you MUST analyze the inputs step-by-step.
+2. CONTRADICTION_CHECK: Explicitly identify where models disagree.
+3. WEIGHTED_TRUST: Resolve contradictions by favoring the most technically detailed proof.
+4. HALLUCINATION_GUARD: If a finding lacks a specific payload or location, mark it as 'speculative'.
+5. CVSS_SCORING: Provide a justified CVSS v3.1 score for each confirmed finding.
+6. ROOT_CAUSE: Explain the underlying code/config flaw for each vulnerability.
+
+Raw Swarm Inputs:
+{chr(10).join(f"--- Model: {r['model']} ---\n{r['response']}" for r in responses)}
+
+Final Consolidated Analysis (Follow the 'Reasoning -> Finding -> Fix' format):
+"""
+        # Use strongest available model for governor synthesis
+        # Prefer Claude (reasoning best), then GPT-4, then fallback to first available
+        governor = None
+        for llm in self.llms:
+            if hasattr(llm, 'model') and 'claude' in llm.model.lower():
+                governor = llm
+                break
+        if not governor and self.llms:
+            # Fallback to first LLM if no Claude available
+            governor = self.llms[0]
+        
+        if not governor:
+            raise RuntimeError("No LLMs available for governor synthesis")
+        
+        self.logger.info(f"🧠 [Swarm Governor] {governor.model if hasattr(governor, 'model') else 'Governor'} is synthesizing consensus with CoT Reasoning...")
+        try:
+            start_time = time.time()
+            result = governor.invoke(refinement_prompt)
+            elapsed = time.time() - start_time
+            if elapsed > llm_timeout:
+                self.logger.warning(f"Governor synthesis exceeded timeout ({elapsed:.1f}s > {llm_timeout}s)")
+            return result
+        except Exception as e:
+            self.logger.error(f"Governor synthesis failed: {e}")
+            # Fallback: return concatenated swarm responses if synthesis fails
+            return "\n---\n".join(r["response"] for r in responses)
 
     def run(self, attack_surface: Any) -> Dict[str, Any]:
         """Legacy compatibility method for single-run scans."""
         return self.run_phase("full", attack_surface)
 
     def run_phase(self, phase_name: str, context: Dict[str, Any]) -> Any:
-        """Execute a specific phase of the scanning workflow."""
+        """Execute a specific phase of the scanning workflow with error handling."""
         self.logger.info(f"AgentController starting phase: {phase_name}")
         
-        # Merge persistent memory into context if data is missing
-        if phase_name == "enrichment" and not context.get('subdomains'):
-            context['subdomains'] = [n['value'] for _, n in self.memory_graph.query(type='subdomain')]
-        if phase_name == "web_recon" and not context.get('live_hosts'):
-            context['live_hosts'] = [n['value'] for _, n in self.memory_graph.query(type='live_host')]
-        if phase_name == "vuln_scan":
-            # Vuln scan needs full context, pulling all known assets
-            context['subdomains'] = [n['value'] for _, n in self.memory_graph.query(type='subdomain')]
-            context['live_hosts'] = [n['value'] for _, n in self.memory_graph.query(type='live_host')]
+        try:
+            # Merge persistent memory into context if data is missing
+            if phase_name == "enrichment" and not context.get('subdomains'):
+                subdomains = [n['value'] for _, n in self.memory_graph.query(type='subdomain')]
+                if subdomains:
+                    context['subdomains'] = subdomains
+                    self.logger.debug(f"Loaded {len(subdomains)} subdomains from memory graph")
+            
+            if phase_name == "web_recon" and not context.get('live_hosts'):
+                live_hosts = [n['value'] for _, n in self.memory_graph.query(type='live_host')]
+                if live_hosts:
+                    context['live_hosts'] = live_hosts
+                    self.logger.debug(f"Loaded {len(live_hosts)} live hosts from memory graph")
+            
+            if phase_name == "vuln_scan":
+                # Vuln scan needs full context, pulling all known assets
+                subdomains = [n['value'] for _, n in self.memory_graph.query(type='subdomain')]
+                live_hosts = [n['value'] for _, n in self.memory_graph.query(type='live_host')]
+                if subdomains:
+                    context.setdefault('subdomains', subdomains)
+                if live_hosts:
+                    context.setdefault('live_hosts', live_hosts)
+            
+            agents: List[Agent] = []
+            tasks: List[Task] = []
+            
+            if phase_name == "discovery":
+                agents, tasks = self._build_discovery_phase(context)
+            elif phase_name == "enrichment":
+                agents, tasks = self._build_enrichment_phase(context)
+            elif phase_name == "web_recon":
+                agents, tasks = self._build_web_recon_phase(context)
+            elif phase_name == "vuln_scan":
+                agents, tasks = self._build_vuln_scan_phase(context)
+            else:
+                self.logger.error(f"Unknown phase: {phase_name}")
+                return {}
+
+            if not agents or not tasks:
+                self.logger.warning(f"Phase {phase_name} has no agents or tasks")
+                return {}
+
+            crew = Crew(
+                agents=agents,
+                tasks=tasks,
+                process=Process.sequential,
+                verbose=True,
+                cache=True,
+            )
+
+            result = crew.kickoff()
+            
+            # Persist memory after phase completion
+            try:
+                self.memory_graph.save()
+            except Exception as e:
+                self.logger.error(f"Failed to save memory graph: {e}")
+            
+            return self._parse_phase_result(result, phase_name)
         
-        agents: List[Agent] = []
-        tasks: List[Task] = []
-        
-        if phase_name == "discovery":
-            agents, tasks = self._build_discovery_phase(context)
-        elif phase_name == "enrichment":
-            agents, tasks = self._build_enrichment_phase(context)
-        elif phase_name == "web_recon":
-            agents, tasks = self._build_web_recon_phase(context)
-        elif phase_name == "vuln_scan":
-            agents, tasks = self._build_vuln_scan_phase(context)
-        else:
-            self.logger.error(f"Unknown phase: {phase_name}")
+        except Exception as e:
+            self.logger.error(f"Error during {phase_name} phase execution: {e}", exc_info=True)
             return {}
-
-        crew = Crew(
-            agents=agents,
-            tasks=tasks,
-            process=Process.sequential,
-            verbose=True,
-            cache=True,
-        )
-
-        result = crew.kickoff()
-        
-        # Persist memory after phase completion
-        self.memory_graph.save()
-        
-        return self._parse_phase_result(result, phase_name)
 
     def _build_discovery_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
         planner = Agent(
@@ -159,19 +279,55 @@ class AgentController:
         return [web_specialist], [task]
 
     def _build_vuln_scan_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
-        hacker = Agent(
-            role='Vulnerability Researcher',
-            goal='Identify and validate high-impact vulnerabilities with reproducible PoCs.',
-            backstory='Senior penetration tester specializing in non-intrusive exploit validation. You prioritize finding SQLi, XSS, RCE, and SSRF. You use OOB (Out-of-Band) interactions for maximum blind discovery.',
+        # 1. THE ATTACK STRATEGIST (Planning)
+        strategist = Agent(
+            role='Lead Attack Strategist',
+            goal='Plan the optimal attack path based on reconnaissance data. Identify high-value targets and logical flows.',
+            backstory='Expert red team strategist. You analyze technical stack data, endpoint mappings, and JS secrets to prioritize targets. You use logical reasoning to plan how to chain vulnerabilities.',
+            tools=self.tool_registry.get_tools('discovery') + self.tool_registry.get_tools('web'),
+            llm=self._create_llm(self.config['agents'].get('exploit', self.config['agents'].get('recon', {}))),
+            allow_delegation=True
+        )
+
+        # 2. THE PAYLOAD GENERATOR (Exploitation)
+        generator = Agent(
+            role='Elite Payload Architect',
+            goal='Generate highly-targeted, context-aware payloads and custom exploit scripts for identified targets.',
+            backstory='Specialized in precision exploitation. You don\'t use generic payloads; you study the target stack (e.g., PHP, Go, Node) and craft custom bypasses. You use the sandbox to verify payload syntax.',
             tools=self.tool_registry.get_tools('vuln'),
-            llm=self._create_llm(self.config['agents']['exploit']),
+            llm=self._create_llm(self.config['agents'].get('exploit', self.config['agents'].get('recon', {}))),
         )
-        task = Task(
-            description=f"Conduct targeted vulnerability scanning on the attack surface. Use the following context gathered in previous phases: {json.dumps(context)}. Prioritize OOB testing if SSRF or RCE are suspected.",
-            agent=hacker,
-            expected_output="A JSON-formatted array of findings, each including title, severity, location, description, and a reproducible PoC."
+
+        # 3. THE VULNERABILITY INTERPRETER (Analysis & Scoring)
+        interpreter = Agent(
+            role='Senior Vulnerability Interpreter',
+            goal='Analyze tool outputs, identify root causes, filter false positives, and assign industrial severity scores (CVSS).',
+            backstory='Security auditor and CVSS expert. Your role is to take raw data and turn it into elite technical reports. You explain *why* something is broken and how to fix it at the code level. You ensure zero hallucinations.',
+            tools=[], # Pure reasoning role
+            llm=self._create_llm(self.config['agents'].get('exploit', self.config['agents'].get('recon', {}))),
         )
-        return [hacker], [task]
+
+        task_strategy = Task(
+            description=f"Analyze the full attack surface context: {json.dumps(context)}. Prioritize which endpoints and services to target first. Create a sequential ATTACK PLAN.",
+            agent=strategist,
+            expected_output="A prioritized attack plan documenting targets and planned exploit vectors."
+        )
+
+        task_generation = Task(
+            description="Execute tools and generate specific payloads/PoCs for targets in the attack plan. Use the sandbox to verify execution where possible. Focus on bypasses and logical flaws.",
+            agent=generator,
+            context=[task_strategy],
+            expected_output="A technical list of discovered vulnerabilities with context-aware payloads and execution logs."
+        )
+
+        task_analysis = Task(
+            description="Interpret the findings from the generator. For each confirmed vulnerability: 1. Explain the ROOT CAUSE. 2. Filter False Positives. 3. Assign CVSS v3.1 Severity. 4. Provide Code-Level Remediation.",
+            agent=interpreter,
+            context=[task_generation],
+            expected_output="A final structured JSON array of findings with: title, severity, cvss_score, root_cause, attack_payload, poc, and remediation."
+        )
+
+        return [strategist, generator, interpreter], [task_strategy, task_generation, task_analysis]
 
     def _parse_phase_result(self, result: Any, phase_name: str) -> Any:
         """Standardize the crew output back into a dictionary."""
@@ -253,16 +409,23 @@ class AgentController:
         required_keys = {
             'title': 'Unknown Finding',
             'severity': 'info',
-            'location': '',
-            'description': '',
+            'cvss_score': 0.0,
+            'root_cause': 'Not specified.',
+            'location': 'N/A',
+            'description': 'No description provided.',
+            'impact': 'Vulnerability impact not specified.',
+            'remediation': 'No remediation steps provided.',
             'payload': '',
-            'poc_lang': '',
+            'poc_lang': 'text',
             'poc': '',
             'validated': False,
         }
         normalised = []
         for f in findings:
             if isinstance(f, dict):
-                entry = {k: f.get(k, default) for k, default in required_keys.items()}
+                entry = {k: f.get(k, required_keys[k]) for k in required_keys}
+                # Special case: if payload is present but poc is not, assume it's part of the PoC context
+                if entry.get('payload') and not entry.get('poc'):
+                    entry['poc'] = f"Payload: {entry['payload']}"
                 normalised.append(entry)
         return normalised

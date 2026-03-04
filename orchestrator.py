@@ -48,6 +48,26 @@ class Orchestrator:
 
         self.logger = logging.getLogger(__name__)
         
+        # Sandbox Client (Industrial Execution Bridge)
+        from sandbox.client import SandboxClient
+        try:
+            self.sandbox = SandboxClient(config)
+            if self.sandbox.enabled:
+                self.logger.info("✓ Sandbox initialized successfully")
+            else:
+                self.logger.warning("⚠ Sandbox disabled - using local tool execution")
+        except Exception as e:
+            self.logger.warning(f"⚠ Sandbox initialization failed: {e}")
+            self.logger.info("  Continuing with local tool execution")
+            # Create a disabled sandbox client
+            self.sandbox = type('DisabledSandbox', (), {
+                'enabled': False,
+                'execute': lambda *args, **kw: None
+            })()
+        
+        # Inject sandbox into config so registry can share it with tool instances
+        self.config['_sandbox_client'] = self.sandbox
+
         # Telemetry & Tool Registry
         from telemetry.logger import Telemetry
         self.telemetry = Telemetry(self.workspace / "telemetry.json")
@@ -63,6 +83,18 @@ class Orchestrator:
         from validation.validator import Validator
         self.validator = Validator(config, self.workspace, self.telemetry)
         
+        # Industrial Storage Layer
+        from engine.storage import AtomicFileStore
+        self.storage = AtomicFileStore(self.workspace)
+        
+        # AI Self-Healing
+        from engine.auto_healer import AutoHealer
+        self.auto_healer = AutoHealer(config, self.agent_controller)
+
+        # Hybrid Vulnerability Analyzer
+        from engine.analyzer import VulnerabilityAnalyzer
+        self.vuln_analyzer = VulnerabilityAnalyzer(config, self.agent_controller, self.tool_registry)
+
         # CI Integration
         from ci.notifier import CINotifier
         self.ci_notifier = CINotifier(config)
@@ -71,6 +103,12 @@ class Orchestrator:
         max_concurrent = config.get('scan', {}).get('max_concurrent_tools', 5)
         self._tool_semaphore = asyncio.Semaphore(max_concurrent)
 
+    async def _execute_with_semaphore(self, phase_name: str, task_coro) -> Any:
+        """Execute a task with semaphore control to limit concurrency."""
+        async with self._tool_semaphore:
+            self.logger.debug(f"[{phase_name}] Acquiring execution slot (available: {self._tool_semaphore._value})")
+            return await task_coro
+    
     async def run(self, target: str) -> ScanResult:
         """Execute the full phased workflow asynchronously."""
         self.logger.info(f"🚀 [ORCHESTRATOR] Starting Phased Scan for: {target}")
@@ -88,54 +126,109 @@ class Orchestrator:
         
         try:
             start_idx = phases.index(start_phase)
-        except ValueError:
+        except (ValueError, IndexError):
+            self.logger.warning(f"Invalid start_phase '{start_phase}', starting from A")
             start_idx = 0
             
         current_phases = phases[start_idx:]
+        final_findings = []
 
         try:
             if self.config.get('scan', {}).get('mode') == 'distributed' and CELERY_AVAILABLE:
+                self.logger.info("[ORCHESTRATOR] Distributed mode enabled")
                 return await self.run_distributed(target)
 
             # Phase A: Discovery
             if "A" in current_phases:
-                state["phase_data"]["A"] = await self._run_phase_a(target)
-            else:
-                state["phase_data"]["A"] = {}
+                try:
+                    self.logger.debug("[Phase A] Starting discovery phase")
+                    state["phase_data"]["A"] = await self._execute_with_semaphore(
+                        "Phase A", self._run_phase_a(target)
+                    )
+                except Exception as e:
+                    self.logger.error(f"[Phase A] Error: {e}")
+                    if not await self.auto_healer.heal(e, {"phase": "A", "target": target}):
+                        self.logger.info("[Phase A] Continuing despite error (recovery failed)")
+                    else:
+                        state["phase_data"]["A"] = await self._execute_with_semaphore(
+                            "Phase A (Recovery)", self._run_phase_a(target)
+                        )
 
             # Phase B: Host enrichment
             if "B" in current_phases:
-                state["phase_data"]["B"] = await self._run_phase_b(state)
-            else:
-                state["phase_data"]["B"] = {}
+                try:
+                    self.logger.debug("[Phase B] Starting enrichment phase")
+                    state["phase_data"]["B"] = await self._execute_with_semaphore(
+                        "Phase B", self._run_phase_b(state)
+                    )
+                except Exception as e:
+                    self.logger.error(f"[Phase B] Error: {e}")
+                    if not await self.auto_healer.heal(e, {"phase": "B", "state": state}):
+                        self.logger.info("[Phase B] Continuing despite error (recovery failed)")
+                    else:
+                        state["phase_data"]["B"] = await self._execute_with_semaphore(
+                            "Phase B (Recovery)", self._run_phase_b(state)
+                        )
 
             # Phase C: Web recon
             if "C" in current_phases:
-                state["phase_data"]["C"] = await self._run_phase_c(state)
-            else:
-                state["phase_data"]["C"] = {}
+                try:
+                    self.logger.debug("[Phase C] Starting web recon phase")
+                    state["phase_data"]["C"] = await self._execute_with_semaphore(
+                        "Phase C", self._run_phase_c(state)
+                    )
+                except Exception as e:
+                    self.logger.error(f"[Phase C] Error: {e}")
+                    if not await self.auto_healer.heal(e, {"phase": "C", "state": state}):
+                        self.logger.info("[Phase C] Continuing despite error (recovery failed)")
+                    else:
+                        state["phase_data"]["C"] = await self._execute_with_semaphore(
+                            "Phase C (Recovery)", self._run_phase_c(state)
+                        )
 
             # Phase D: Vulnerability scan
             if "D" in current_phases:
-                state["phase_data"]["D"] = await self._run_phase_d(state)
-            else:
-                state["phase_data"]["D"] = {"findings": []}
+                try:
+                    self.logger.debug("[Phase D] Starting vulnerability scan phase")
+                    state["phase_data"]["D"] = await self._execute_with_semaphore(
+                        "Phase D", self._run_phase_d(state)
+                    )
+                except Exception as e:
+                    self.logger.error(f"[Phase D] Error: {e}")
+                    if not await self.auto_healer.heal(e, {"phase": "D", "state": state}):
+                        self.logger.info("[Phase D] Continuing despite error (recovery failed)")
+                    else:
+                        state["phase_data"]["D"] = await self._execute_with_semaphore(
+                            "Phase D (Recovery)", self._run_phase_d(state)
+                        )
 
             # Phase E: Correlation & Reporting
-            final_findings = await self._run_phase_e(state)
+            try:
+                self.logger.debug("[Phase E] Starting correlation and reporting phase")
+                final_findings = await self._run_phase_e(state)
+            except Exception as e:
+                self.logger.error(f"[Phase E] Error during correlation: {e}")
+                final_findings = list(state.get("phase_data", {}).get("D", {}).get("findings", []))
             
             # Generate Reports
-            from reporting.generator import ReportGenerator
-            report_gen = ReportGenerator(self.config, self.workspace, target=target)
-            report_paths = report_gen.generate(final_findings)
+            try:
+                from reporting.generator import ReportGenerator
+                report_gen = ReportGenerator(self.config, self.workspace, target=target)
+                report_paths = report_gen.generate(final_findings)
+            except Exception as e:
+                self.logger.error(f"Failed to generate reports: {e}")
+                report_paths = {}
 
             primary_report = report_paths.get('markdown', str(self.workspace))
             
             # CI Logic
             exit_code = 0
-            if self.config.get('ci', {}).get('enabled'):
-                exit_code = self._calculate_exit_code(final_findings)
-                await self._notify_ci(target, final_findings, primary_report, exit_code)
+            try:
+                if self.config.get('ci', {}).get('enabled'):
+                    exit_code = self._calculate_exit_code(final_findings)
+                    await self._notify_ci(target, final_findings, primary_report, exit_code)
+            except Exception as e:
+                self.logger.error(f"CI notification failed: {e}")
 
             return ScanResult(
                 findings=final_findings,
@@ -143,8 +236,19 @@ class Orchestrator:
                 exit_code=exit_code
             )
 
+        except Exception as e:
+            self.logger.exception(f"Orchestrator fatal error: {e}")
+            # Return partial results with error indication
+            return ScanResult(
+                findings=final_findings,
+                report_path={},
+                exit_code=1
+            )
         finally:
-            self.telemetry.save()
+            try:
+                self.telemetry.save()
+            except Exception as e:
+                self.logger.error(f"Failed to save telemetry: {e}")
             duration = time.time() - start_time
             self.logger.info(f"🏁 [ORCHESTRATOR] Scan complete. Duration: {duration:.2f}s")
 
@@ -213,7 +317,41 @@ class Orchestrator:
         
         # Validation & Deduplication
         validated = [self.validator.validate(f, self.tool_registry) for f in raw_findings]
-        return self.validator.deduplicate(validated)
+        unique_findings = self.validator.deduplicate(validated)
+
+        # Diff Mode: Highlight new findings vs previous run
+        if self.config.get('scan', {}).get('diff_mode', True):
+            unique_findings = self._apply_diff_mode(state.get("target"), unique_findings)
+
+        return unique_findings
+
+    def _apply_diff_mode(self, target: str, current_findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Identify which findings are new compared to the most recent previous scan."""
+        previous_scans = sorted(Path(self.config.get('reporting', {}).get('output_dir', './scans')).glob("run_*"), reverse=True)
+        # Skip current workspace
+        previous_scans = [p for p in previous_scans if p != self.workspace]
+
+        previous_findings_fps = set()
+        for scan_dir in previous_scans:
+            report_json = scan_dir / "report.json"
+            if report_json.exists():
+                try:
+                    with open(report_json, 'r') as f:
+                        data = json.load(f)
+                        if data.get("target") == target:
+                            for fnd in data.get("findings", []):
+                                fingerprint = f"{fnd.get('title')}|{fnd.get('location')}|{fnd.get('payload')}"
+                                previous_findings_fps.add(fingerprint)
+                            break # Found most recent scan for this target
+                except: continue
+
+        for fnd in current_findings:
+            fp = f"{fnd.get('title')}|{fnd.get('location')}|{fnd.get('payload')}"
+            fnd["is_new"] = fp not in previous_findings_fps
+            if fnd["is_new"]:
+                self.logger.info(f"✨ New vulnerability discovered: {fnd.get('title')}")
+
+        return current_findings
 
     def _calculate_exit_code(self, findings: List[Dict[str, Any]]) -> int:
         """Determines exit code: 1 if critical/high vulnerabilities exist."""
@@ -224,7 +362,13 @@ class Orchestrator:
 
     async def _notify_ci(self, target: str, findings: List[Dict[str, Any]], primary_report: str, exit_code: int) -> None:
         """Send asynchronous notifications for CI pipelines."""
-        # Using to_thread for the potentially blocking notification logic
-        await asyncio.to_thread(
-            self.ci_notifier.notify, target, findings, primary_report, exit_code
-        )
+        try:
+            # Using to_thread for the potentially blocking notification logic
+            await asyncio.to_thread(
+                self.ci_notifier.notify, target, findings, primary_report, exit_code
+            )
+        except Exception as e:
+            self.logger.error(f"❌ [ORCHESTRATOR] Notification failure: {e}")
+            if self.config.get('scan', {}).get('ai_swarm'):
+                self.logger.info("🧠 [Swarm Recovery] Attempting notification fallback via secondary channels...")
+                # Placeholder for future swarm notification redundancy

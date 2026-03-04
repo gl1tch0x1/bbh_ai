@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 import importlib
 import logging
 from pathlib import Path
+from functools import lru_cache
 
 if TYPE_CHECKING:
     from telemetry.logger import Telemetry
@@ -11,6 +12,7 @@ class ToolRegistry:
     """
     Dynamically indexes and lazy-loads tool wrappers from tools/wrappers/.
     Improves startup speed by only instantiating tools when actually requested.
+    Implements category-level caching for O(1) lookups.
     """
 
     def __init__(self, config: Dict[str, Any], workspace: Path, telemetry: 'Telemetry'):
@@ -23,6 +25,9 @@ class ToolRegistry:
         self._tool_index: Dict[str, Dict[str, str]] = {}
         # Cache for instantiated tools
         self._instances: Dict[str, Any] = {}
+        # Cache for category lookups: category -> [tool_names]
+        self._category_cache: Dict[str, List[str]] = {}
+        self._category_cache_built = False
         
         self._index_tools()
 
@@ -64,6 +69,16 @@ class ToolRegistry:
             module = importlib.import_module(metadata["module"])
             tool_class: Type[Any] = getattr(module, metadata["class"])
             instance = tool_class(self.config, self.workspace, self.telemetry)
+            
+            # 🔗 Inject Sandbox Client for Industrial Execution Bridge
+            # Avoid circular import by using instance check or duck typing
+            if hasattr(instance, 'sandbox'):
+                # Fetch sandbox from config or orchestrator context (passed via config if needed)
+                # In our Orchestrator, we should ideally pass a sandbox object.
+                # Since config is shared, we can also use a singleton or global if needed,
+                # but passing it via property is cleaner.
+                instance.sandbox = self.config.get('_sandbox_client')
+                
             self._instances[name] = instance
             return instance
         except Exception as e:
@@ -77,7 +92,8 @@ class ToolRegistry:
     def get_tools(self, category: str) -> List[Any]:
         """
         Return tools belonging to a given category.
-        Loads instances on-demand.
+        Loads instances on-demand. Uses category caching for O(1) lookups.
+        Falls back to empty list if no tools found for category.
         """
         # If category is '*', we must load everything (rarely used by agents)
         if category == '*':
@@ -85,25 +101,39 @@ class ToolRegistry:
                 self._load_instance(name)
             return list(self._instances.values())
 
-        # First, ensure all potential tools for this category are indexed
-        # (Though we already indexed all names in __init__)
+        # Build category cache once (lazy initialization)
+        if not self._category_cache_built:
+            self._build_category_cache()
+            self._category_cache_built = True
         
-        # We need to peek at 'categories' attribute without full instantiation 
-        # for ALL tools, or just instantiate them all. 
-        # Optimization: Instantiate all tools for the requested category.
+        # O(1) lookup: get tool names by category, then load instances
+        tool_names = self._category_cache.get(category, [])
         
         matched_instances = []
-        for name in self._tool_index:
+        for name in tool_names:
             instance = self._load_instance(name)
-            if instance and category in getattr(instance, 'categories', []):
+            if instance:
                 matched_instances.append(instance)
 
-        if not matched_instances and category != 'vuln':
-            # Note: Category 'vuln' is usually specific, others might fallback
-            self.logger.warning(f"No tools found for category '{category}'. Falling back to all loaded.")
-            return list(self._instances.values())
-
+        if not matched_instances:
+            # Log warning but return empty list (agents can handle empty tool lists)
+            self.logger.warning(f"No tools found for category '{category}'.")
+        
         return matched_instances
+
+    def _build_category_cache(self) -> None:
+        """Build a cache mapping categories to tool names for fast lookups."""
+        for name in self._tool_index:
+            try:
+                instance = self._load_instance(name)
+                if instance:
+                    tool_categories = getattr(instance, 'categories', [])
+                    for cat in tool_categories:
+                        if cat not in self._category_cache:
+                            self._category_cache[cat] = []
+                        self._category_cache[cat].append(name)
+            except Exception as e:
+                self.logger.debug(f"Skipped category caching for {name}: {e}")
 
     def list_tools(self) -> List[str]:
         """Return sorted list of all indexed tool names."""
