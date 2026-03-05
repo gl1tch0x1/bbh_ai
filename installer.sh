@@ -24,7 +24,22 @@ trap 'cleanup' EXIT INT TERM
 
 on_error() {
     echo -e "\n${RED}${BOLD}✗ Installation failed at line $LINENO${RESET}"
-    echo -e "${YELLOW}Review log: $LOG_FILE${RESET}"
+    echo -e "${YELLOW}Log file: $LOG_FILE${RESET}"
+    
+    # Show APT diagnostics if apt-related error
+    if grep -q "apt\|dpkg" << EOF
+$(tail -50 "$LOG_FILE" 2>/dev/null)
+EOF
+    then
+        print_apt_diagnostics
+    fi
+    
+    echo -e "${CYAN}Review the log file or try these troubleshooting steps:${RESET}"
+    echo "  1. Check internet connection: ping google.com"
+    echo "  2. Check APT:  sudo apt-get update"
+    echo "  3. Fix broken dependencies: sudo apt-get -f install"
+    echo "  4. Re-run installer: sudo ./installer.sh"
+    echo ""
     exit 1
 }
 
@@ -96,6 +111,30 @@ CROSS_MARK="✗"
 WARN_MARK="⚠"
 INFO_MARK="ℹ"
 ARROW="▶"
+
+# =============================================================================
+# Troubleshooting & Diagnostics
+# =============================================================================
+
+print_apt_diagnostics() {
+    echo ""
+    print_warning "APT Diagnostics Information"
+    echo "  • System: $(lsb_release -d 2>/dev/null | cut -f2)"
+    echo "  • Kernel: $(uname -r)"
+    echo "  • Arch: $ARCHITECTURE"
+    echo ""
+    echo "  To manually fix APT issues, try:"
+    echo "    1. sudo apt-get clean"
+    echo "    2. sudo apt-get autoclean"
+    echo "    3. sudo apt-get -f install"
+    echo "    4. sudo apt-get update"
+    echo "    5. sudo apt-get upgrade"
+    echo ""
+    echo "  For specific package errors:"
+    echo "    sudo apt-cache search <package_name>"
+    echo "    sudo apt-get install -y <package_name>"
+    echo ""
+}
 
 # =============================================================================
 # Output Functions (Context-Aware)
@@ -344,6 +383,7 @@ validate_prerequisites() {
     # Project directory check
     if [[ ! -f "$SCRIPT_DIR/config.example.yaml" ]]; then
         print_error "Must run from project root (where config.example.yaml exists)"
+        echo "  Current directory: $SCRIPT_DIR"
         exit 1
     fi
     print_success "Project root verified"
@@ -354,6 +394,13 @@ validate_prerequisites() {
         exit 1
     fi
     print_success "Linux $ARCHITECTURE system detected"
+    
+    # Distro detection
+    local distro_info="Unknown"
+    if [[ -f /etc/os-release ]]; then
+        distro_info=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
+    fi
+    print_info "Distribution: $distro_info"
     
     # Check disk space
     if ! check_disk_space; then
@@ -374,46 +421,103 @@ validate_prerequisites() {
 }
 
 # =============================================================================
-# System Dependencies
+# System Dependencies (with Recovery & Diagnostics)
 # =============================================================================
 
 install_system_dependencies() {
     print_step "System Dependencies"
     
-    local -a required_packages=(
+    # Critical dependencies - must have
+    local -a critical_packages=(
         git curl wget make build-essential libpcap-dev libssl-dev
         python3 python3-pip python3-venv jq parallel nmap masscan
         dnsutils unzip docker.io net-tools whois apt-transport-https
-        ca-certificates gnupg lsb-release git-lfs
+        ca-certificates gnupg lsb-release
     )
     
-    print_info "Checking dependencies..."
-    local missing_packages=()
+    # Optional dependencies - nice to have but not critical
+    local -a optional_packages=(
+        git-lfs
+    )
     
-    for pkg in "${required_packages[@]}"; do
-        if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed"; then
-            missing_packages+=("$pkg")
+    # Preliminary diagnostics
+    print_info "Running APT diagnostics..."
+    
+    # Check and fix broken dependencies
+    if ! apt-get check &>/dev/null; then
+        print_warning "Fixing broken dependencies..."
+        if run_with_spinner "apt-get -f install -y" "Fixing broken APT state"; then
+            print_success "Broken dependencies fixed"
+        else
+            print_warning "Could not auto-fix all dependencies, continuing..."
         fi
-    done
-    
-    if [[ ${#missing_packages[@]} -eq 0 ]]; then
-        print_success "All system dependencies installed"
-        return 0
     fi
+    
+    # Clean apt cache
+    apt-get clean &>/dev/null || true
+    apt-get autoclean &>/dev/null || true
     
     # Update package lists with retry
     print_info "Updating package lists..."
     if ! run_with_retry "apt-get update" "apt-get update"; then
-        print_warning "apt update had issues, continuing..."
+        print_warning "apt update had issues, continuing with cached packages..."
     fi
     
-    # Install missing packages
-    print_info "Installing ${#missing_packages[@]} missing packages..."
-    if run_with_spinner "apt-get install -y ${missing_packages[*]}" "Installing packages"; then
-        print_success "System dependencies installed"
+    # Check for critical packages
+    print_info "Checking dependencies..."
+    local missing_critical=()
+    local missing_optional=()
+    
+    for pkg in "${critical_packages[@]}"; do
+        if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed"; then
+            missing_critical+=("$pkg")
+        fi
+    done
+    
+    for pkg in "${optional_packages[@]}"; do
+        if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed"; then
+            missing_optional+=("$pkg")
+        fi
+    done
+    
+    # Install critical packages
+    if [[ ${#missing_critical[@]} -gt 0 ]]; then
+        print_info "Installing ${#missing_critical[@]} critical packages..."
+        if run_with_spinner "apt-get install -y --no-install-recommends ${missing_critical[*]}" "Installing packages"; then
+            print_success "Critical packages installed"
+        else
+            print_error "Failed to install critical packages"
+            print_info "Attempting individual package installation..."
+            
+            # Try installing individually for better diagnostics
+            local failed_critical=()
+            for pkg in "${missing_critical[@]}"; do
+                if ! run_with_spinner "apt-get install -y --no-install-recommends '$pkg'" "Installing $pkg"; then
+                    failed_critical+=("$pkg")
+                fi
+            done
+            
+            if [[ ${#failed_critical[@]} -gt 0 ]]; then
+                print_error "Cannot install: ${failed_critical[*]}"
+                print_warning "These packages may not be available in your distro"
+                print_info "Try: apt-get install -y ${failed_critical[*]}"
+                return 1
+            fi
+        fi
     else
-        print_error "Some dependencies may not have installed"
-        return 1
+        print_success "All critical packages already installed"
+    fi
+    
+    # Install optional packages (non-blocking)
+    if [[ ${#missing_optional[@]} -gt 0 ]]; then
+        print_info "Installing ${#missing_optional[@]} optional packages..."
+        for pkg in "${missing_optional[@]}"; do
+            if run_with_spinner "apt-get install -y --no-install-recommends '$pkg'" "Installing $pkg"; then
+                print_success "$pkg installed"
+            else
+                print_warning "$pkg not available in repositories (skipped)"
+            fi
+        done
     fi
 }
 
@@ -763,7 +867,7 @@ EOF
 print_completion_summary() {
     print_step "Installation Complete"
     
-    echo -e "  ${GREEN}${CHECK_MARK}${RESET} System dependencies: installed/verified"
+    echo -e "  ${GREEN}${CHECK_MARK}${RESET} System dependencies: checked"
     echo -e "  ${GREEN}${CHECK_MARK}${RESET} Go environment: configured"
     echo -e "  ${GREEN}${CHECK_MARK}${RESET} Security tools: installed"
     echo -e "  ${GREEN}${CHECK_MARK}${RESET} gf patterns: configured"
@@ -791,8 +895,10 @@ print_completion_summary() {
     echo ""
     echo -e "${YELLOW}Troubleshooting:${RESET}"
     echo "  • Installation log: $LOG_FILE"
+    echo "  • Fix broken APT: sudo apt-get -f install && sudo apt-get update"
     echo "  • Network issues? Use: SKIP_NETWORK_DIAGS=true sudo ./installer.sh"
     echo "  • Verbose mode: VERBOSE_MODE=true sudo ./installer.sh"
+    echo "  • Missing package? Try: sudo apt-cache search <name>"
     echo ""
     echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${RESET}"
     echo -e "${GREEN}${BOLD}BBH-AI is ready for enterprise penetration testing!${RESET}\n"
