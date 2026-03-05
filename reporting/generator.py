@@ -152,7 +152,7 @@ class ReportGenerator:
         counts: Dict[str, int],
         tci: Dict[str, Any],
     ) -> str:
-        env = Environment(loader=BaseLoader())
+        env = Environment(loader=BaseLoader(), autoescape=True)
         template = env.from_string(_MARKDOWN_TEMPLATE)
         output = template.render(
             date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

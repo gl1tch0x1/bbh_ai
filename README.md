@@ -9,11 +9,16 @@ BBH-AI is an **enterprise-grade autonomous security testing platform** that comb
 
 ## 🎯 Key Capabilities
 
-### 🧠 AI-Powered Threat Intelligence
-- **Swarm Consensus**: Multiple LLM models (GPT-4, Claude 3.5, Gemini) reason together to reach high-confidence decisions
-- **Chain-of-Thought Reasoning**: Explicit step-by-step attack planning, validation, and root cause analysis
-- **Adaptive Exploitation**: AI generates context-aware payloads based on discovered vulnerabilities
-- **CVSS v3.1 Scoring**: Automated severity calculation with zero hallucinations
+### 🧠 Autonomous Swarm Intelligence
+- **Graph-Based Multi-Agent System**: Specialized agents (Planner, Recon, Exploit, Validator, Reporter) collaborate via a shared O(1) Memory Graph.
+- **Target Complexity Index (TCI)**: Dynamically calculates a 0-100 target complexity score to autonomously adjust the depth of the scan path.
+- **Auto-Healing Orchestrator**: Compensates for tool failures, sanitizes tool outputs dynamically, and restarts crashed processes without human intervention.
+
+### 🛡️ Advanced Exploit Primitives & Sandbox
+- **Playwright Browser Automation**: Discovers and validates DOM-based XSS, CSRF, and logic flaws in a headless browser.
+- **Mitmproxy Request Manipulation**: Deep HTTP manipulation and replay capabilities.
+- **Python Execution & PoC Generation**: Automatically validates findings and generates executable standalone Python and cURL proof-of-concept scripts.
+- **Pillar-Grade Sandbox Isolation**: Containerized testing environment enforcing strict resource limits per primitive endpoint.
 
 ### 🛡️ Industrial-Grade Reliability
 - **Atomic Data Integrity**: Write-to-temp-then-rename ensures no data corruption even during crashes
@@ -55,11 +60,11 @@ BBH-AI is an **enterprise-grade autonomous security testing platform** that comb
 - ✅ **Playwright-Based Validation**: Runs JavaScript-dependent exploits in headless browsers
 - ✅ **Out-of-Band Testing**: Interactsh integration for blind vulnerability confirmation
 
-### Reporting & Analytics
-- ✅ **Multi-Format Output**: Markdown, JSON, HTML with interactive dashboards
-- ✅ **Risk Metrics**: CVSS v3.1 scores, severity breakdown, trend analysis
-- ✅ **Executive Summaries**: High-level findings for stakeholders
-- ✅ **Evidence Artifacts**: Screenshots, HTTP requests, stack traces
+### Reporting & Enterprise CI/CD
+- **Multi-Format Output**: Markdown, JSON, CSV with interactive dashboards and embedded executable PoCs.
+- **Risk Metrics & CVSS v3.1**: Automated severity calculation, base scores, and vector strings without hallucination.
+- **Strix-Level CLI**: Real-time non-interactive CLI streaming with deterministic exit codes (`0` clean, `1` critical, `2` high).
+- **CI/CD Integrations**: Native notification support triggering Jira tickets or Slack webhooks on critical findings.
 
 ---
 
@@ -94,11 +99,12 @@ graph TD
 
 | Phase | Purpose | Key Tools | Output |
 |-------|---------|-----------|--------|
-| **A: Discovery** | Passive intelligence gathering | `subfinder`, `gau`, `whois`, `shodan` | Subdomains, IPs, DNS records |
+| **A: Discovery** | Passive intelligence gathering | `subfinder`, `gau`, `whois`, `shodan` | Subdomains, IPs, TCI initialization |
 | **B: Enrichment** | Host and port enumeration | `dnsx`, `puredns`, `naabu`, `httpx` | Live hosts, ports, services |
-| **C: Web Recon** | Application analysis | `jsluice`, `katana`, `urless`, `ffuf` | Endpoints, APIs, tech stacks |
-| **D: Exploitation** | Active vulnerability testing | `nuclei`, `sqlmap`, `ghauri`, `commix` | Validated vulnerabilities |
-| **E: Reporting** | Analysis & documentation | `storage`, `validator`, `analyzer` | Reports + CVSS scores |
+| **C: Web Recon** | Application analysis | `jsluice`, `katana`, `urless`, `ffuf` | Endpoints, JS Secrets, Final TCI |
+| **D: Vuln Scan** | Attack mapping and payload generation | `nuclei`, `sqlmap`, AI Generator | Prioritized attack plan, Raw findings |
+| **E: Validation** | Confirmation and PoC generation | `sandbox`, `browser`, `terminal` | Confirmed findings, Executable PoCs |
+| **F: Reporting** | Formatting & notifications | `Jira/Slack`, `JSON/MD Generator` | Final Report, Exit Codes |
 
 ---
 
@@ -112,9 +118,9 @@ graph TB
     
     AS["🕵️ Attack Strategist<br/>─ Analyzes recon<br/>─ Maps attack paths<br/>─ Prioritizes targets<br/>─ LLM: Claude 3.5"]
     
-    PA["🛠️ Payload Architect<br/>─ Creates exploits<br/>─ Generates payloads<br/>─ Validates PoCs<br/>─ LLM: GPT-4o"]
+    PA["🛠️ Payload Architect<br/>─ Creates exploits<br/>─ Uses Sandbox primitives<br/>─ Generates payloads<br/>─ LLM: GPT-4o"]
     
-    VI["🔬 Vuln Interpreter<br/>─ Explains findings<br/>─ Scores CVSS v3.1<br/>─ Suggests fixes<br/>─ LLM: Gemini Pro"]
+    VI["🔬 Validator & Interpreter<br/>─ Confirms findings via Sandbox<br/>─ Generates standalone Python/cURL PoCs<br/>─ Scores CVSS v3.1<br/>─ LLM: Gemini Pro"]
     
     CONS["🧠 Consensus Logic<br/><br/>2/3 Agreement = CONFIRM<br/>3/3 Agreement = HIGH CONFIDENCE<br/>Disagreement = Requires Review"]
     

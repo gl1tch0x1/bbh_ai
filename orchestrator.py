@@ -2,7 +2,7 @@ import copy
 import logging
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, List
 
 from agent_controller import AgentController
 from celery_app import celery
@@ -113,7 +113,7 @@ class Orchestrator:
                 await asyncio.to_thread(func, self.state)
 
                 if on_finding and key in ("vuln_scan", "validation"):
-                    latest: list = self.state.get("findings", [])
+                    latest: List[Dict[str, Any]] = self.state.get("findings", [])
                     for f in latest:
                         on_finding(f)
 
@@ -152,7 +152,7 @@ class Orchestrator:
 
         # 1. External OSINT Tools
         subfinder = self.tool_registry.get_tool("subfinder")
-        subs: list = []
+        subs: List[str] = []
         if subfinder:
             import asyncio
             subs = asyncio.run(subfinder.run(target=context["target"]))
@@ -313,7 +313,7 @@ class Orchestrator:
         )
 
     # ── Diff Mode Helper ──────────────────────────────────────────────────────
-    def _apply_diff_mode(self, current_findings: list) -> list:
+    def _apply_diff_mode(self, current_findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         from validation.validator import Validator
         validator = Validator(self.config, self.workspace, self.telemetry)
         previous = self.store.load("baseline_findings")

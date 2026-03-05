@@ -168,7 +168,7 @@ class AgentController:
 
         except Exception as exc:
             self.logger.error(
-                f"Error during {phase_name} phase execution: {exc}", exc_info=True
+                f"Error during {phase_name} phase execution: {type(exc).__name__} - {exc}", exc_info=True
             )
             return {}
 

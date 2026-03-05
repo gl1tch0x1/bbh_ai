@@ -20,10 +20,11 @@ class DigTool:
     def run(self, domain: str, nameserver: str = "") -> Dict[str, Any]:
         """Run dig AXFR check for DNS zone transfers."""
         try:
-            target = f"@{nameserver}" if nameserver else ""
-            command = f"dig +nocmd +noall +answer axfr {domain} {target} 2>&1"
+            cmd = ["dig", "+nocmd", "+noall", "+answer", "axfr", domain]
+            if nameserver:
+                cmd.append(f"@{nameserver}")
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=30
+                cmd, capture_output=True, text=True, timeout=30
             )
             return {
                 "success": result.returncode == 0,

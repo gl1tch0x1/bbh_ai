@@ -25,7 +25,7 @@ class JsParserTool:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self.logger.debug("SSL verification disabled for JS fetch — do not use on untrusted networks.")
         try:
-            response = requests.get(js_url, timeout=self._timeout, verify=False)
+            response = requests.get(js_url, timeout=self._timeout, verify=False)  # nosec B501
             if response.status_code != 200:
                 self.logger.warning(f"JS fetch returned HTTP {response.status_code} for {js_url}")
                 return {"error": f"HTTP {response.status_code}", "endpoints": []}
