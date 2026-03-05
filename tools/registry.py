@@ -122,18 +122,32 @@ class ToolRegistry:
         return matched_instances
 
     def _build_category_cache(self) -> None:
-        """Build a cache mapping categories to tool names for fast lookups."""
-        for name in self._tool_index:
+        """Build a cache mapping categories to tool names for fast lookups.
+
+        To avoid the overhead of instantiating every tool merely to read its
+        static `categories` attribute, we import the module and inspect the
+        class directly. Only if the class cannot be imported or inspected do we
+        fall back to actually loading an instance.
+        """
+        for name, meta in self._tool_index.items():
             try:
-                instance = self._load_instance(name)
-                if instance:
-                    tool_categories = getattr(instance, 'categories', [])
-                    for cat in tool_categories:
-                        if cat not in self._category_cache:
-                            self._category_cache[cat] = []
-                        self._category_cache[cat].append(name)
+                module = importlib.import_module(meta["module"])
+                tool_class = getattr(module, meta["class"])
+                tool_categories = getattr(tool_class, 'categories', []) or []
             except Exception as e:
-                self.logger.debug(f"Skipped category caching for {name}: {e}")
+                # as a fallback, instantiate the tool to read categories
+                self.logger.debug(f"Falling back to instance for category caching of {name}: {e}")
+                try:
+                    inst = self._load_instance(name)
+                    tool_categories = getattr(inst, 'categories', []) if inst else []
+                except Exception as ee:
+                    self.logger.debug(f"Could not determine categories for {name}: {ee}")
+                    tool_categories = []
+
+            for cat in tool_categories:
+                if cat not in self._category_cache:
+                    self._category_cache[cat] = []
+                self._category_cache[cat].append(name)
 
     def list_tools(self) -> List[str]:
         """Return sorted list of all indexed tool names."""

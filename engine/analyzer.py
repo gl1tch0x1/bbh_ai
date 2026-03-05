@@ -6,11 +6,18 @@ class VulnerabilityAnalyzer:
     """
     Hybrid AI-Tool Vulnerability Engine for BBH-AI.
     Implements the flow: Tool Output -> AI Interpretation -> Validation Tool -> Final Report.
+
+    This component may perform active payload validation using the sandbox client.
+    The sandbox reference is optional; if provided it will be used during the
+    validation stage. If not, the analyzer will still function but will mark
+    findings as unvalidated.
     """
-    def __init__(self, config: Dict[str, Any], agent_controller: Any, tool_registry: Any):
+    def __init__(self, config: Dict[str, Any], agent_controller: Any, tool_registry: Any, sandbox_client: Any = None):
         self.config = config
         self.agent_controller = agent_controller
         self.tool_registry = tool_registry
+        # sandbox can be passed explicitly or retrieved from config (injected by Orchestrator)
+        self.sandbox = sandbox_client or config.get('_sandbox_client')
         self.logger = logging.getLogger(__name__)
 
     async def analyze_finding(self, tool_name: str, output: Any, target: str) -> Optional[Dict[str, Any]]:

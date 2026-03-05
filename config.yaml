@@ -42,6 +42,8 @@ scan:
   rate_limit:    5
   timeout:       300           # Increased for OSINT and Vuln scans
   js_file_limit: 25
+  # whether to run the AI-powered VulnerabilityAnalyzer in phase E
+  use_vuln_analyzer: true
 
 tools:
   osint:

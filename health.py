@@ -46,10 +46,29 @@ class HealthChecker:
         try:
             subprocess.run(["docker", "info"], check=True, capture_output=True)
             print("    [+] Docker is running and available.")
-            return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             print("    [!] Docker is NOT running or NOT installed. Essential for sandboxing.")
             return False
+
+        # additionally verify the sandbox image can be pulled or exists locally
+        image = self.config.get('sandbox', {}).get('image')
+        if image:
+            try:
+                res = subprocess.run(["docker", "image", "inspect", image], capture_output=True, check=False)
+                if res.returncode != 0:
+                    print(f"    [i] Sandbox image '{image}' not present locally; attempting to pull...")
+                    pull_res = subprocess.run(["docker", "pull", image], capture_output=True, check=False)
+                    if pull_res.returncode == 0:
+                        print(f"    [+] Pulled sandbox image '{image}' successfully.")
+                    else:
+                        print(f"    [!] Failed to pull sandbox image '{image}'. Please ensure network access or that the image name is correct.")
+                        return False
+                else:
+                    print(f"    [+] Sandbox image '{image}' is already available locally.")
+            except Exception as e:
+                print(f"    [!] Error checking sandbox image: {e}")
+                return False
+        return True
 
     def check_api_keys(self) -> bool:
         keys = {

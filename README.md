@@ -223,7 +223,7 @@ python sandbox_diagnostics.py
    GOOGLE_API_KEY=AIza...
    ```
 
-2. **Review `config.yaml`**:
+2. **Review `config.yaml`** (defaults shown).
    ```yaml
    llm:
      default_model: "gpt-4o"
@@ -234,10 +234,22 @@ python sandbox_diagnostics.py
      timeout: 300                    # seconds per tool
      js_file_limit: 50               # JavaScript files to analyze
      max_concurrent_tools: 5
+     use_vuln_analyzer: true          # enable AI vuln interpretation
+   
+   sandbox:
+     enabled: true                   # run tools inside Docker
+     image: "bbh-ai-unified"       # sandbox image name
+     host_workspace: "/path/on/host"  # optional path to mount into container
    
    ci:
      enabled: true
    ```
+
+   The `sandbox.host_workspace` value, if provided, will be bind-mounted into
+   the container at `/tmp/bbh_workspace`. Tools executed in the sandbox will
+   store their temporary files there and the orchestrator can inspect them when
+   needed for debugging.
+
 
 3. **Verify system health**:
    ```bash

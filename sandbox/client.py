@@ -20,13 +20,15 @@ class SandboxClient:
     HEALTH_CHECK_RETRIES = 15
     HEALTH_CHECK_INTERVAL = 1.0  # seconds
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], base_workspace: Optional[Path] = None):
         self.config = config
-        self.enabled: bool = config['sandbox'].get('enabled', True)
+        self.enabled: bool = config.get('sandbox', {}).get('enabled', True)
         self.client: Optional['DockerClient'] = None
         self.container: Optional['Container'] = None
         self.api_url: Optional[str] = None
         self.logger = logging.getLogger(__name__)
+        # workspace path on the host (optional) to mount into container
+        self.base_workspace = str(base_workspace) if base_workspace else None
         
         # Async HTTP client for tool execution
         self._async_client: Optional[httpx.AsyncClient] = None
@@ -42,32 +44,47 @@ class SandboxClient:
     def _start_container(self) -> None:
         """Synchronous initialization of the Docker container."""
         sandbox_cfg = self.config['sandbox']
+        image = sandbox_cfg['image']
         try:
+            # ensure the image exists locally (pull if necessary)
+            try:
+                self.client.images.get(image)
+                self.logger.debug(f"Sandbox image '{image}' already present")
+            except Exception:
+                self.logger.info(f"Pulling sandbox image '{image}'...")
+                self.client.images.pull(image)
+
             mem_limit = sandbox_cfg.get('memory_limit', '1g')
             cpu_limit = float(sandbox_cfg.get('cpu_limit', 1.0))
             
+            volume_map = None
+            # priority: explicit config.host_workspace > base_workspace
+            host_ws = sandbox_cfg.get('host_workspace') or self.base_workspace
+            if host_ws:
+                volume_map = {host_ws: {'bind': '/tmp/bbh_workspace', 'mode': 'rw'}}
+
             self.container = self.client.containers.run(
-                sandbox_cfg['image'],
+                image,
                 detach=True,
                 network=sandbox_cfg.get('network', 'none'),
                 mem_limit=mem_limit,
                 nano_cpus=int(cpu_limit * 1e9),
                 remove=sandbox_cfg.get('ephemeral', True),
-                labels={"app": "bbh-ai-sandbox"}
+                labels={"app": "bbh-ai-sandbox"},
+                volumes=volume_map
             )
             self.container.reload()
             
-            # Fetch IP
+            # Fetch IP with retries
             ip = ""
-            for _ in range(5):
-                ip = self.container.attrs['NetworkSettings']['IPAddress']
-                if not ip:
-                    networks = self.container.attrs['NetworkSettings']['Networks']
-                    if networks:
-                        ip = list(networks.values())[0].get('IPAddress', '')
-                if ip: break
-                time.sleep(0.5)
+            for _ in range(15):
                 self.container.reload()
+                networks = self.container.attrs['NetworkSettings']['Networks']
+                if networks:
+                    ip = list(networks.values())[0].get('IPAddress', '')
+                if ip:
+                    break
+                time.sleep(0.5)
 
             if not ip:
                 raise RuntimeError("Could not determine sandbox container IP address.")
@@ -86,18 +103,26 @@ class SandboxClient:
             raise
 
     def _wait_for_health_sync(self) -> None:
-        """Synchronous health check for initial block."""
+        """Synchronous health check for initial block.
+
+        Retries until the FastAPI server responds with 200 or raises an error
+        once the retry limit is exceeded.  Provides detailed logging.
+        """
         with httpx.Client() as client:
-            for attempt in range(self.HEALTH_CHECK_RETRIES):
+            for attempt in range(1, self.HEALTH_CHECK_RETRIES + 1):
                 try:
                     resp = client.get(f"{self.api_url}/health", timeout=2)
                     if resp.status_code == 200:
                         self.logger.info("Sandbox health check passed.")
                         return
-                except (httpx.ConnectError, httpx.TimeoutException):
-                    pass
+                    else:
+                        self.logger.debug(f"Health endpoint returned {resp.status_code}")
+                except (httpx.ConnectError, httpx.TimeoutException) as e:
+                    self.logger.debug(f"Health check attempt {attempt} failed: {e}")
+                except Exception as e:
+                    self.logger.error(f"Unexpected error during health check: {e}")
                 time.sleep(self.HEALTH_CHECK_INTERVAL)
-        raise RuntimeError(f"Sandbox at {self.api_url} did not become healthy.")
+        raise RuntimeError(f"Sandbox at {self.api_url} did not become healthy after {self.HEALTH_CHECK_RETRIES} attempts.")
 
     async def initialize_async(self) -> None:
         """Initialize the async HTTP client. Should be called within an async context."""
@@ -105,7 +130,14 @@ class SandboxClient:
             self._async_client = httpx.AsyncClient(timeout=timeout_cfg if (timeout_cfg := self.config.get('scan', {}).get('timeout', 30)) else 30)
 
     async def execute(self, tool_name: str, args: Dict[str, Any], workspace: Optional[Path] = None) -> Dict[str, Any]:
-        """Asynchronously execute a tool in the sandbox."""
+        """Asynchronously execute a tool in the sandbox.
+
+        The `workspace` parameter specifies a directory (on the host) that should
+        be made available inside the container for the tool to store temporary
+        output. It is mapped into the container when the sandbox is started.  If
+        no workspace is provided, we default to an ephemeral folder inside the
+        container (typically `/tmp/workspace`).
+        """
         if not self.enabled:
             # Fallback to local execution (sync wrap)
             from tools.registry import ToolRegistry
@@ -120,9 +152,13 @@ class SandboxClient:
 
         try:
             timeout = self.config.get('scan', {}).get('timeout', 30)
+            payload: Dict[str, Any] = {"tool": tool_name, "args": args}
+            if workspace:
+                payload["workspace"] = str(workspace)
+
             response = await self._async_client.post(
                 f"{self.api_url}/execute",
-                json={"tool": tool_name, "args": args},
+                json=payload,
                 timeout=timeout + 10
             )
             response.raise_for_status()

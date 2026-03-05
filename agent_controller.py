@@ -4,17 +4,30 @@ import re
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional, TYPE_CHECKING
+
+# Use forward references for crewai types to keep static analysis happy when
+# the library isn't installed in the environment.
+if TYPE_CHECKING:
+    from crewai import Agent, Task, Crew, Process
 import signal
 
 # CrewAI & LangChain Imports
+# We explicitly track availability so that missing dependencies fail early
+_CREWAI_AVAILABLE = False
 try:
     from crewai import Agent, Task, Crew, Process
+    _CREWAI_AVAILABLE = True
+except ImportError:
+    Agent = Task = Crew = Process = None
+
+try:
     from langchain_openai import ChatOpenAI
     from langchain_anthropic import ChatAnthropic
     from langchain_google_genai import ChatGoogleGenerativeAI
 except ImportError:
-    pass
+    # missing LLM provider libraries will surface later during LLM instantiation
+    ChatOpenAI = ChatAnthropic = ChatGoogleGenerativeAI = None
 
 from memory.graph import MemoryGraph
 
@@ -30,6 +43,10 @@ _MODEL_PROVIDER_MAP: List[Tuple[Tuple[str, ...], str, str]] = [
 
 class AgentController:
     def __init__(self, config: Dict[str, Any], workspace: Any, telemetry: Any, tool_registry: Any):
+        # ensure required libraries are present
+        if not _CREWAI_AVAILABLE:
+            raise RuntimeError("crewai library is required by AgentController but is not installed.")
+
         self.config = config
         self.workspace = workspace
         self.telemetry = telemetry
@@ -192,8 +209,8 @@ Final Consolidated Analysis (Follow the 'Reasoning -> Finding -> Fix' format):
                 if live_hosts:
                     context.setdefault('live_hosts', live_hosts)
             
-            agents: List[Agent] = []
-            tasks: List[Task] = []
+            agents: List[Any] = []
+            tasks: List[Any] = []
             
             if phase_name == "discovery":
                 agents, tasks = self._build_discovery_phase(context)
@@ -233,7 +250,7 @@ Final Consolidated Analysis (Follow the 'Reasoning -> Finding -> Fix' format):
             self.logger.error(f"Error during {phase_name} phase execution: {e}", exc_info=True)
             return {}
 
-    def _build_discovery_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+    def _build_discovery_phase(self, context: Dict[str, Any]) -> Tuple[List[Any], List[Any]]:
         planner = Agent(
             role='Discovery Specialist',
             goal='Identify all basic attack surface assets including domains, subdomains, and related IPs.',
@@ -248,7 +265,7 @@ Final Consolidated Analysis (Follow the 'Reasoning -> Finding -> Fix' format):
         )
         return [planner], [task]
 
-    def _build_enrichment_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+    def _build_enrichment_phase(self, context: Dict[str, Any]) -> Tuple[List[Any], List[Any]]:
         recon = Agent(
             role='Enrichment Specialist',
             goal='Validate subdomains and enrich them with network metadata (DNS, SSL, Open Ports).',
@@ -263,7 +280,7 @@ Final Consolidated Analysis (Follow the 'Reasoning -> Finding -> Fix' format):
         )
         return [recon], [task]
 
-    def _build_web_recon_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+    def _build_web_recon_phase(self, context: Dict[str, Any]) -> Tuple[List[Any], List[Any]]:
         web_specialist = Agent(
             role='Web Recon Analyst',
             goal='Profile web technologies, crawl endpoints, and identify hidden attack surface in web apps.',
@@ -278,7 +295,7 @@ Final Consolidated Analysis (Follow the 'Reasoning -> Finding -> Fix' format):
         )
         return [web_specialist], [task]
 
-    def _build_vuln_scan_phase(self, context: Dict[str, Any]) -> Tuple[List[Agent], List[Task]]:
+    def _build_vuln_scan_phase(self, context: Dict[str, Any]) -> Tuple[List[Any], List[Any]]:
         # 1. THE ATTACK STRATEGIST (Planning)
         strategist = Agent(
             role='Lead Attack Strategist',

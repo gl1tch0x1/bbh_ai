@@ -51,7 +51,8 @@ class Orchestrator:
         # Sandbox Client (Industrial Execution Bridge)
         from sandbox.client import SandboxClient
         try:
-            self.sandbox = SandboxClient(config)
+            # pass the orchestrator workspace so the container can mount it
+            self.sandbox = SandboxClient(config, base_workspace=self.workspace)
             if self.sandbox.enabled:
                 self.logger.info("✓ Sandbox initialized successfully")
             else:
@@ -93,7 +94,8 @@ class Orchestrator:
 
         # Hybrid Vulnerability Analyzer
         from engine.analyzer import VulnerabilityAnalyzer
-        self.vuln_analyzer = VulnerabilityAnalyzer(config, self.agent_controller, self.tool_registry)
+        # provide sandbox client so analyzer can execute validation payloads
+        self.vuln_analyzer = VulnerabilityAnalyzer(config, self.agent_controller, self.tool_registry, self.sandbox)
 
         # CI Integration
         from ci.notifier import CINotifier
@@ -249,6 +251,12 @@ class Orchestrator:
                 self.telemetry.save()
             except Exception as e:
                 self.logger.error(f"Failed to save telemetry: {e}")
+            # cleanup sandbox resources if any
+            try:
+                if hasattr(self.sandbox, 'close'):
+                    await self.sandbox.close()
+            except Exception as cleanup_e:
+                self.logger.warning(f"Error closing sandbox: {cleanup_e}")
             duration = time.time() - start_time
             self.logger.info(f"🏁 [ORCHESTRATOR] Scan complete. Duration: {duration:.2f}s")
 
@@ -272,10 +280,14 @@ class Orchestrator:
         # Wait for completion (poll)
         final_result = await self._wait_for_job(job)
         
+        findings = final_result.get('total_findings', [])
+        exit_code = 0
+        if self.config.get('ci', {}).get('enabled'):
+            exit_code = self._calculate_exit_code(findings)
         return ScanResult(
-            findings=final_result.get('total_findings', []),
+            findings=findings,
             report_path=final_result.get('report_paths', {}),
-            exit_code=0
+            exit_code=exit_code
         )
 
     async def _wait_for_job(self, job):
@@ -315,8 +327,29 @@ class Orchestrator:
         self.logger.info("--- [Phase E: Final Correlation & Deduplication] ---")
         raw_findings = state["phase_data"].get("D", {}).get("findings", [])
         
+        # Optional AI-driven interpretation/validation step via VulnerabilityAnalyzer
+        findings_to_process = raw_findings
+        if self.vuln_analyzer and self.config.get('scan', {}).get('use_vuln_analyzer', True):
+            self.logger.info("[Phase E] Running vulnerability analyzer on raw findings")
+            analyzed = []
+            coros = []
+            for f in raw_findings:
+                tool_name = f.get('tool', 'unknown')
+                coros.append(self.vuln_analyzer.analyze_finding(tool_name, f.get('outputs', f), state.get('target')))
+            results = await asyncio.gather(*coros, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    self.logger.warning(f"Analyzer raised exception: {r}")
+                elif r is None:
+                    # skip false positives or failed interpretation
+                    continue
+                else:
+                    analyzed.append(r)
+            findings_to_process = analyzed
+            self.logger.info(f"[Phase E] Analyzer produced {len(analyzed)} interpreted findings")
+
         # Validation & Deduplication
-        validated = [self.validator.validate(f, self.tool_registry) for f in raw_findings]
+        validated = [self.validator.validate(f, self.tool_registry) for f in findings_to_process]
         unique_findings = self.validator.deduplicate(validated)
 
         # Diff Mode: Highlight new findings vs previous run
