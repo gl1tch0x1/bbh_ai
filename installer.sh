@@ -1,5 +1,5 @@
 #!/bin/bash
-# installer.sh – Complete setup for BBH‑AI multi‑agent framework
+# installer.sh - Complete setup for BBH-AI multi-agent framework
 # Run as root: sudo ./installer.sh
 
 set -euo pipefail
