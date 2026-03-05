@@ -4,6 +4,7 @@ import asyncio
 import logging
 import httpx
 import docker
+import docker.errors
 from pathlib import Path
 
 if TYPE_CHECKING:
@@ -53,9 +54,35 @@ class SandboxClient:
             try:
                 self.client.images.get(image)
                 self.logger.debug(f"Sandbox image '{image}' already present")
-            except Exception:
-                self.logger.info(f"Pulling sandbox image '{image}'...")
-                self.client.images.pull(image)
+            except docker.errors.ImageNotFound:
+                self.logger.info(f"Sandbox image '{image}' not found locally. Building...")
+                self._print_image_build_instructions(image)
+                raise RuntimeError(
+                    f"\n{'='*70}\n"
+                    f"❌ Docker image '{image}' not found\n\n"
+                    f"To build the image, run:\n"
+                    f"  $ python rebuild_docker.py\n\n"
+                    f"If you have network issues, use:\n"
+                    f"  $ SKIP_BBH_NETWORK_DIAGNOSTICS=true python rebuild_docker.py\n\n"
+                    f"{'='*70}\n"
+                )
+            except docker.errors.APIError as e:
+                if "timeout" in str(e).lower() or "deadline exceeded" in str(e).lower():
+                    self.logger.error(f"Network timeout while accessing Docker image '{image}'")
+                    self._print_network_troubleshooting()
+                    raise RuntimeError(
+                        f"\n{'='*70}\n"
+                        f"❌ Network timeout accessing Docker registry\n\n"
+                        f"The image '{image}' may not be built locally.\n"
+                        f"Please build the image first:\n"
+                        f"  $ python rebuild_docker.py\n\n"
+                        f"If you continue to have network issues:\n"
+                        f"  $ SKIP_BBH_NETWORK_DIAGNOSTICS=true python rebuild_docker.py\n\n"
+                        f"{'='*70}\n"
+                    )
+                else:
+                    self.logger.error(f"Docker API error accessing image '{image}': {e}")
+                    raise
 
             mem_limit = sandbox_cfg.get('memory_limit', '1g')
             cpu_limit = float(sandbox_cfg.get('cpu_limit', 1.0))
@@ -108,6 +135,39 @@ class SandboxClient:
             if self.container:
                 self._stop_container()
             raise
+
+    @staticmethod
+    def _print_image_build_instructions(image_name: str) -> None:
+        """Print instructions for building the Docker image."""
+        print(f"\n{'='*70}")
+        print(f"📦 Docker image '{image_name}' needs to be built")
+        print(f"{'='*70}\n")
+        print("To build the image, run one of:")
+        print(f"\n  Option 1 (Recommended with good network):")
+        print(f"    $ python rebuild_docker.py\n")
+        print(f"  Option 2 (With network issues):")
+        print(f"    $ SKIP_BBH_NETWORK_DIAGNOSTICS=true python rebuild_docker.py\n")
+        print(f"  Option 3 (Verbose mode for debugging):")
+        print(f"    $ python rebuild_docker.py 2>&1 | tee build.log\n")
+        print(f"{'='*70}\n")
+
+    @staticmethod
+    def _print_network_troubleshooting() -> None:
+        """Print network troubleshooting guidance."""
+        print(f"\n{'='*70}")
+        print(f"🔧 Network Troubleshooting")
+        print(f"{'='*70}\n")
+        print("If you're experiencing network timeouts:")
+        print(f"\n  1. Check your internet connection:")
+        print(f"     $ ping 8.8.8.8\n")
+        print(f"  2. Check DNS resolution:")
+        print(f"     $ nslookup registry-1.docker.io\n")
+        print(f"  3. Restart Docker daemon:")
+        print(f"     $ sudo systemctl restart docker\n")
+        print(f"  4. Build without network diagnostics:")
+        print(f"     $ SKIP_BBH_NETWORK_DIAGNOSTICS=true python rebuild_docker.py\n")
+        print(f"  5. Configure a Docker registry mirror (if behind corporate firewall)\n")
+        print(f"{'='*70}\n")
 
     def _wait_for_health_sync(self) -> None:
         """
