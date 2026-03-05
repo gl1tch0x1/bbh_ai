@@ -5,11 +5,13 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+
 class AtomicFileStore:
     """
     Atomic file storage for BBH-AI data persistence.
     Ensures data integrity by writing to temp files and atomic moves.
     """
+
     def __init__(self, workspace: str):
         self.workspace = Path(workspace)
         self.data_dir = self.workspace / "data"
@@ -17,34 +19,34 @@ class AtomicFileStore:
         self.logger = logging.getLogger(__name__)
 
     def save(self, key: str, data: Any) -> None:
-        """Atomically save data to a file."""
+        """Atomically save data to a JSON file."""
         file_path = self.data_dir / f"{key}.json"
         temp_path = file_path.with_suffix('.tmp')
-        
+
         try:
-            with open(temp_path, 'w') as f:
+            with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
             temp_path.replace(file_path)  # Atomic move
-            self.logger.debug(f"Saved {key} to {file_path}")
-        except Exception as e:
+            self.logger.debug(f"Saved '{key}' to {file_path}")
+        except Exception as exc:
             if temp_path.exists():
                 temp_path.unlink()
-            self.logger.error(f"Failed to save {key}: {e}")
+            self.logger.error(f"Failed to save '{key}': {exc}")
             raise
 
     def load(self, key: str) -> Optional[Any]:
-        """Load data from file."""
+        """Load data from a JSON file."""
         file_path = self.data_dir / f"{key}.json"
         if not file_path.exists():
             return None
-        
+
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception as e:
-            self.logger.error(f"Failed to load {key}: {e}")
+        except Exception as exc:
+            self.logger.error(f"Failed to load '{key}': {exc}")
             return None
 
     def exists(self, key: str) -> bool:
-        """Check if key exists."""
+        """Check if a stored key exists on disk."""
         return (self.data_dir / f"{key}.json").exists()

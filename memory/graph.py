@@ -1,5 +1,7 @@
-from typing import Any, Dict, List, Set, Tuple, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
+import json
 import logging
+from pathlib import Path
 from collections import defaultdict
 
 
@@ -12,10 +14,10 @@ class MemoryGraph:
     def __init__(self, filepath: Optional[Path] = None) -> None:
         self.nodes: Dict[str, Dict[str, Any]] = {}      # node_id → data dict
         self.edges: List[Tuple[str, str, str]] = []     # (from_id, to_id, relation)
-        self._index: Dict[str, Set[str]] = defaultdict(set)
+        self._index: Dict[str, Any] = defaultdict(set)
         self.filepath = filepath
         self.logger = logging.getLogger(__name__)
-        
+
         if self.filepath and self.filepath.exists():
             self.load()
 
@@ -30,7 +32,9 @@ class MemoryGraph:
     def add_edge(self, from_node: str, to_node: str, relation: str) -> None:
         """Add a directed edge between two nodes."""
         self.edges.append((from_node, to_node, relation))
-        self.logger.debug(f"MemoryGraph: edge '{from_node}' -[{relation}]-> '{to_node}'")
+        self.logger.debug(
+            f"MemoryGraph: edge '{from_node}' -[{relation}]-> '{to_node}'"
+        )
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a node data dictionary by ID."""
@@ -49,9 +53,8 @@ class MemoryGraph:
         first_key, first_val = items[0]
         index_key = f"{first_key}:{first_val}"
         candidate_ids = self._index.get(index_key)
-        
+
         if candidate_ids is None:
-            # If the first filter matches nothing, no point checking others
             return []
 
         results: List[Tuple[str, Dict[str, Any]]] = []
@@ -73,22 +76,30 @@ class MemoryGraph:
         return {"nodes": len(self.nodes), "edges": len(self.edges)}
 
     def save(self) -> None:
-        """Persist the graph to the filesystem."""
+        """Persist the graph to the filesystem atomically."""
         if not self.filepath:
             return
-        
+
         # Convert sets in _index to lists for JSON serialization
         index_serializable = {k: list(v) for k, v in self._index.items()}
-        
+
         data = {
             "nodes": self.nodes,
             "edges": self.edges,
-            "index": index_serializable
+            "index": index_serializable,
         }
-        
-        import json
-        with open(self.filepath, "w") as f:
-            json.dump(data, f)
+
+        # Atomic write: temp file then rename
+        tmp_path = self.filepath.with_suffix('.tmp')
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            tmp_path.replace(self.filepath)
+        except Exception as exc:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            self.logger.error(f"MemoryGraph save failed: {exc}")
+            raise
         self.logger.debug(f"MemoryGraph saved to {self.filepath}")
 
     def load(self) -> None:
@@ -96,18 +107,17 @@ class MemoryGraph:
         if not self.filepath or not self.filepath.exists():
             return
 
-        import json
         try:
-            with open(self.filepath, "r") as f:
+            with open(self.filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                self.nodes = data.get("nodes", {})
-                self.edges = [tuple(e) for e in data.get("edges", [])]
-                
-                # Rebuild index from lists to sets
-                raw_index = data.get("index", {})
-                self._index = defaultdict(set)
-                for k, v in raw_index.items():
-                    self._index[k] = set(v)
+            self.nodes = data.get("nodes", {})
+            self.edges = [tuple(e) for e in data.get("edges", [])]
+
+            # Rebuild index from lists to sets
+            raw_index = data.get("index", {})
+            self._index = defaultdict(set)
+            for k, v in raw_index.items():
+                self._index[k] = set(v)
             self.logger.debug(f"MemoryGraph loaded from {self.filepath}")
-        except Exception as e:
-            self.logger.error(f"Failed to load MemoryGraph: {e}")
+        except Exception as exc:
+            self.logger.error(f"Failed to load MemoryGraph: {exc}")

@@ -1,0 +1,79 @@
+# BBH-AI Strix-Level Configuration Example
+# Copy this file to config.yaml and edit it.
+# DO NOT COMMIT YOUR REAL config.yaml OR .env FILES!
+
+llm:
+  default_model: "${LLM_DEFAULT_MODEL}"  # e.g., "claude-3-5-sonnet-20241022" or "gpt-4o"
+  openai_api_key: "${OPENAI_API_KEY}"
+  anthropic_api_key: "${ANTHROPIC_API_KEY}"
+  google_api_key: "${GOOGLE_API_KEY}"
+  deepseek_api_key: "${DEEPSEEK_API_KEY}"
+  timeout_seconds: 60
+
+agents:
+  planner:
+    model: "${LLM_DEFAULT_MODEL}"
+    temperature: 0.1
+  recon:
+    model: "${LLM_DEFAULT_MODEL}"
+    temperature: 0.2
+  exploit:
+    model: "${LLM_DEFAULT_MODEL}"
+    temperature: 0.3
+  reporter:
+    model: "${LLM_DEFAULT_MODEL}"
+    temperature: 0.1
+
+scan:
+  mode: "standard"        # quick, standard, deep, stealth
+  start_phase: "A"        # A, B, C, D, E, F
+  diff_mode: false        # Compare against baseline and report only NEW findings
+  timeout: 1800           # Global scan timeout (seconds)
+  # ai_swarm: "claude-3-5-sonnet-20241022,gpt-4o" # Uncomment to enable multi-model consensus
+
+sandbox:
+  enabled: true
+  image: "bbh/sandbox:latest"
+  cpu_limit: 1.0          # CPU cores allocated to sandbox container
+  memory_limit: "1g"      # Memory allocated
+  network: "none"         # Prevent lateral movement from container
+  ephemeral: true         # Auto-remove container after scan
+  host_workspace: ""      # Optional: bind-mount this host dir into the container
+
+tools:
+  discovery:
+    subfinder:
+      enabled: true
+    amass:
+      enabled: false
+  hosts:
+    nmap:
+      enabled: true
+      args: "-T4 -F"
+    dnsx:
+      enabled: true
+  web:
+    katana:
+      enabled: true
+      depth: 3
+    httpx:
+      enabled: true
+  vuln:
+    nuclei:
+      enabled: true
+      templates: ["cves", "vulnerabilities", "misconfiguration"]
+    interactsh:
+      enabled: false      # Enable for Out-of-Band (OOB) vulnerability testing
+
+reporting:
+  formats: ["markdown", "json", "csv"]
+
+ci:
+  enabled: false
+  exit_codes: true
+  slack_webhook: "${SLACK_WEBHOOK_URL}"
+  # Jira integration for enterprise ticket opening
+  jira_url: "${JIRA_URL}"
+  jira_email: "${JIRA_EMAIL}"
+  jira_token: "${JIRA_TOKEN}"
+  jira_project_key: "${JIRA_PROJECT_KEY}"

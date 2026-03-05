@@ -26,33 +26,33 @@ ENV GOPROXY=direct GOSUMDB=off CGO_ENABLED=0 \
     HTTP_TIMEOUT=300 HTTPS_TIMEOUT=300
 RUN set -e; \
     for tool in \
-        "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.0.0" \
-        "github.com/projectdiscovery/dnsx/cmd/dnsx@v1.1.6" \
-        "github.com/projectdiscovery/tlsx/cmd/tlsx@v1.1.6" \
-        "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.6.3" \
-        "github.com/d3mondev/puredns/v2@v2.2.2" \
-        "github.com/trickest/dsieve@v1.0.5" \
-        "github.com/intigriti/misconfig-mapper/cmd/misconfig-mapper@v0.1.3" \
-        "github.com/JosueEncinar/gotator@v1.3" \
-        "github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.1.4"; \
+    "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.0.0" \
+    "github.com/projectdiscovery/dnsx/cmd/dnsx@v1.1.6" \
+    "github.com/projectdiscovery/tlsx/cmd/tlsx@v1.1.6" \
+    "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.6.3" \
+    "github.com/d3mondev/puredns/v2@v2.2.2" \
+    "github.com/trickest/dsieve@v1.0.5" \
+    "github.com/intigriti/misconfig-mapper/cmd/misconfig-mapper@v0.1.3" \
+    "github.com/JosueEncinar/gotator@v1.3" \
+    "github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.1.4"; \
     do \
-        echo "Installing $tool..."; \
-        attempt=1; \
-        while [ $attempt -le 3 ]; do \
-            if go install -v "$tool" 2>&1; then \
-                echo "✓ $tool installed"; \
-                break; \
-            else \
-                if [ $attempt -lt 3 ]; then \
-                    echo "⚠ Retry $attempt/3 for $tool, waiting 10s..."; \
-                    sleep 10; \
-                    attempt=$((attempt + 1)); \
-                else \
-                    echo "✗ Failed to install $tool after 3 attempts"; \
-                    exit 1; \
-                fi; \
-            fi; \
-        done; \
+    echo "Installing $tool..."; \
+    attempt=1; \
+    while [ $attempt -le 3 ]; do \
+    if go install -v "$tool" 2>&1; then \
+    echo "✓ $tool installed"; \
+    break; \
+    else \
+    if [ $attempt -lt 3 ]; then \
+    echo "⚠ Retry $attempt/3 for $tool, waiting 10s..."; \
+    sleep 10; \
+    attempt=$((attempt + 1)); \
+    else \
+    echo "✗ Failed to install $tool after 3 attempts"; \
+    exit 1; \
+    fi; \
+    fi; \
+    done; \
     done && \
     echo "✓ All Go tools installed successfully"
 
@@ -66,7 +66,11 @@ RUN pip install --no-cache-dir \
     porch-pirate \
     postleaks-ng \
     leaksearch \
-    msftrecon
+    msftrecon \
+    playwright httpx
+
+# Install Playwright Chromium for browser automation primitive
+RUN playwright install chromium --with-deps
 
 # Special tools (cloning/manual install)
 WORKDIR /opt
@@ -89,6 +93,7 @@ RUN git clone https://github.com/xnl-h4ck3r/waymore.git /opt/waymore && \
 # App setup
 WORKDIR /app
 COPY sandbox/server.py /app/server.py
+COPY sandbox/primitives/ /app/sandbox/primitives/
 COPY tools/wrappers/ /app/tools/wrappers/
 
 EXPOSE 8000

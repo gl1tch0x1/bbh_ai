@@ -1,120 +1,126 @@
 """
-ci/notifier.py — Sends scan results to Slack and creates GitHub Issues.
-Called automatically by Orchestrator after a scan completes when CI mode is active.
+ci/notifier.py — Sends scan results to Slack and Jira.
+Called automatically by Orchestrator after a scan completes.
 """
 
-import json
 import logging
-from dataclasses import dataclass
+from typing import Any, Dict, List
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class NotificationPayload:
-    target: str
-    total: int
-    critical: int
-    high: int
-    medium: int
-    low: int
-    report_path: str
-    exit_code: int
-
-
 class CINotifier:
-    """Posts scan summaries to Slack and/or opens GitHub Issues for critical findings."""
+    """Enterprise-grade CI/CD notifier for BBH-AI."""
 
     def __init__(self, config: dict):
         self.ci_cfg = config.get('ci', {})
-        self.slack_webhook = self.ci_cfg.get('slack_webhook', '')
-        self.github_token = self.ci_cfg.get('github_token', '')
-        self.github_repo = self.ci_cfg.get('github_repo', '')   # e.g. "org/repo"
-
-    def notify(self, payload: NotificationPayload) -> None:
-        """Dispatch all configured notification channels."""
-        if self.slack_webhook and self.slack_webhook.startswith('https://'):
-            self._notify_slack(payload)
-        if self.github_token and self.github_repo:
-            self._notify_github(payload)
-
-    # ── Slack ─────────────────────────────────────────────────────────────────
-    def _notify_slack(self, p: NotificationPayload) -> None:
-        """Send scan results to Slack with comprehensive error handling."""
-        if not self.slack_webhook:
-            logger.debug("Slack webhook not configured")
-            return
+        self.slack_webhook: str = self.ci_cfg.get('slack_webhook', '')
         
+        # Jira Config
+        self.jira_url: str = self.ci_cfg.get('jira_url', '')
+        self.jira_email: str = self.ci_cfg.get('jira_email', '')
+        self.jira_token: str = self.ci_cfg.get('jira_token', '')
+        self.jira_project: str = self.ci_cfg.get('jira_project_key', '')
+
+    def notify(
+        self,
+        target: str,
+        findings: List[Dict[str, Any]],
+        report_path: str,
+        exit_code: int,
+    ) -> None:
+        """Dispatch all configured notification channels."""
+        counts = self._count_severities(findings)
+
+        if self.slack_webhook and self.slack_webhook.startswith('https://'):
+            self._notify_slack(target, counts, report_path, exit_code)
+            
+        if self.jira_url and self.jira_token and self.jira_project:
+            self._notify_jira(target, findings, report_path)
+
+    @staticmethod
+    def _count_severities(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+        counts: Dict[str, int] = {
+            'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0,
+        }
+        for f in findings:
+            sev = str(f.get('severity', 'info')).lower()
+            if sev in counts:
+                counts[sev] += 1
+        counts['total'] = len(findings)
+        return counts
+
+    def _notify_slack(
+        self, target: str, counts: Dict[str, int], report_path: str, exit_code: int
+    ) -> None:
+        if not self.slack_webhook:
+            return
+
         try:
-            severity_icon = "🔴" if p.critical else ("🟠" if p.high else "🟡" if p.medium else "🟢")
+            icon = "🔴" if counts['critical'] else "🟠" if counts['high'] else "🟢"
             text = (
-                f"{severity_icon} *BBH-AI Scan Complete* — `{p.target}`\n"
-                f"*Findings:* {p.total} total "
-                f"({p.critical} critical, {p.high} high, {p.medium} medium, {p.low} low)\n"
-                f"*Report:* `{p.report_path}`\n"
-                f"*Exit code:* `{p.exit_code}`"
+                f"{icon} *BBH-AI Scan Complete* — `{target}`\n"
+                f"*Findings:* {counts['total']} total "
+                f"({counts['critical']} critical, {counts['high']} high)\n"
+                f"*Report:* `{report_path}`\n"
+                f"*Exit code:* `{exit_code}`"
             )
-            body = {
-                "text": text,
-                "blocks": [
-                    {"type": "section", "text": {"type": "mrkdwn", "text": text}}
-                ],
-            }
+            body = {"text": text}
             resp = requests.post(self.slack_webhook, json=body, timeout=10)
             resp.raise_for_status()
             logger.info("✓ Slack notification sent")
-        except requests.exceptions.ConnectTimeout:
-            logger.warning("Slack notification timeout - webhook unreachable")
-        except requests.exceptions.HTTPError as e:
-            logger.warning(f"Slack HTTP error: {e.response.status_code}")
-        except Exception as e:
-            logger.warning(f"Slack notification failed: {e}")
+        except Exception as exc:
+            logger.warning(f"Slack notification failed: {exc}")
 
-    # ── GitHub Issues ─────────────────────────────────────────────────────────
-    def _notify_github(self, p: NotificationPayload) -> None:
-        """Open GitHub issue for critical/high findings with proper error handling."""
-        if not self.github_token or not self.github_repo:
-            logger.debug("GitHub configuration incomplete")
+    def _notify_jira(
+        self, target: str, findings: List[Dict[str, Any]], report_path: str
+    ) -> None:
+        """Create Jira tickets for Critical and High findings."""
+        if not all([self.jira_url, self.jira_email, self.jira_token, self.jira_project]):
             return
+
+        critical_high = [
+            f for f in findings 
+            if str(f.get('severity', '')).lower() in ('critical', 'high')
+        ]
         
-        if not p.critical and not p.high:
-            return   # Only open issues for critical/high findings
-        
-        try:
-            title = f"[BBH-AI] {p.critical} critical / {p.high} high findings on {p.target}"
-            body = (
-                f"## BBH-AI Automated Scan Results\n\n"
-                f"| Severity | Count |\n|----------|-------|\n"
-                f"| 🔴 Critical | {p.critical} |\n"
-                f"| 🟠 High | {p.high} |\n"
-                f"| 🟡 Medium | {p.medium} |\n"
-                f"| 🟢 Low | {p.low} |\n\n"
-                f"**Target:** `{p.target}`\n"
-                f"**Report:** `{p.report_path}`\n\n"
-                f"_Auto-generated by BBH-AI_"
-            )
-            url = f"https://api.github.com/repos/{self.github_repo}/issues"
-            headers = {
-                "Authorization": f"Bearer {self.github_token}",
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "BBH-AI/4.0"
-            }
-            resp = requests.post(
-                url, headers=headers, json={"title": title, "body": body}, timeout=15
-            )
-            resp.raise_for_status()
-            issue_url = resp.json().get('html_url', '')
-            logger.info(f"✓ GitHub issue created: {issue_url}")
-        except requests.exceptions.ConnectTimeout:
-            logger.warning("GitHub API timeout - service unreachable")
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                logger.warning("GitHub authentication failed - check token")
-            elif e.response.status_code == 404:
-                logger.warning(f"GitHub repo not found: {self.github_repo}")
-            else:
-                logger.warning(f"GitHub HTTP error {e.response.status_code}")
-        except Exception as e:
-            logger.warning(f"GitHub issue creation failed: {e}")
+        if not critical_high:
+            logger.info("No critical/high findings to report to Jira.")
+            return
+
+        logger.info(f"Opening {len(critical_high)} Jira issues...")
+        auth = (self.jira_email, self.jira_token)
+        headers = {"Accept": "application/json"}
+        url = f"{self.jira_url.rstrip('/')}/rest/api/2/issue"
+
+        for finding in critical_high:
+            try:
+                title = f"[BBH-AI] {finding.get('title')} on {target}"
+                desc = (
+                    f"*Target:* {target}\n"
+                    f"*Severity:* {finding.get('severity').upper()}\n"
+                    f"*CVSS:* {finding.get('cvss_score')} ({finding.get('cvss_vector')})\n\n"
+                    f"*Location:*\n{finding.get('location')}\n\n"
+                    f"*Description:*\n{finding.get('description')}\n\n"
+                    f"*Root Cause:*\n{finding.get('root_cause')}\n\n"
+                    f"*Report Path:*\n{report_path}"
+                )
+                
+                payload = {
+                    "fields": {
+                        "project": {"key": self.jira_project},
+                        "summary": title,
+                        "description": desc,
+                        "issuetype": {"name": "Bug"}
+                    }
+                }
+                
+                resp = requests.post(url, json=payload, auth=auth, headers=headers, timeout=15)
+                resp.raise_for_status()
+                key = resp.json().get('key')
+                logger.info(f"✓ Jira issue created: {key}")
+                
+            except Exception as exc:
+                logger.warning(f"Failed to create Jira issue for '{title}': {exc}")

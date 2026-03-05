@@ -1,0 +1,64 @@
+name: BBH-AI Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Run daily at 2 AM
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target to scan (e.g., example.com)'
+        required: true
+      mode:
+        description: 'Scan Mode'
+        type: choice
+        options: [quick, standard, deep]
+        default: standard
+
+jobs:
+  bbh-ai-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Build Sandbox Image
+        run: docker build -t bbh/sandbox:latest -f sandbox/Dockerfile.sandbox sandbox/
+          
+      - name: Run BBH-AI Scan
+        id: scanner
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+        run: |
+          target="${{ github.event.inputs.target }}"
+          target="${target:-example.com}" # Fallback for cron scheduling
+          
+          # Run non-interactive mode. Exit code 1 = critical, 2 = high.
+          python main.py --target "$target" --mode ${{ github.event.inputs.mode || 'standard' }} -n --ci
+          
+      - name: Upload Security Report
+        if: always() # Upload even if scan fails (finds vulns)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbh-ai-report
+          path: runs/**/report.*
+          retention-days: 14
