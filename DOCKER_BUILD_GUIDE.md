@@ -5,19 +5,22 @@ This guide covers building the BBH-AI sandbox Docker image (`bbh-ai-unified`) an
 
 ---
 
-## Quick Build
+## 🌐 Network Issues?
 
-```bash
-# Automated build using Python script
-python rebuild_docker.py
+If you're experiencing timeouts or connection errors, see:
+→ [NETWORK_TROUBLESHOOTING.md](NETWORK_TROUBLESHOOTING.md)
 
-# Or manual Docker build
-docker build -f sandbox/Dockerfile.sandbox -t bbh-ai-unified .
-```
+Key fixes:
+- Use Google DNS: `8.8.8.8`
+- Configure Docker daemon: `/etc/docker/daemon.json`
+- Test connectivity: `ping 8.8.8.8 && docker pull hello-world`
+- Run diagnostics: `python rebuild_docker.py` (now includes network checks!)
 
 ---
 
-## Common Issues & Solutions
+## 🔍 Quick Diagnostics
+
+The new `rebuild_docker.py` script automatically checks:
 
 ### ❌ Go Module Timeout Error
 
