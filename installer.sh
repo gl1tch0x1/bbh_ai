@@ -1,94 +1,208 @@
 #!/bin/bash
 # installer.sh - Complete automated setup for BBH-AI multi-agent framework
-# This script handles all dependencies, tools, and configurations automatically
 # Run as root: sudo ./installer.sh
 
 set -euo pipefail
 
-# Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ----------------------------------------------------------------------
+# Terminal capabilities and color setup
+# ----------------------------------------------------------------------
+USE_COLOR=true
+USE_TPUT=true
 
-# Logging functions
-print_status() { echo -e "${BLUE}[*]${NC} $1"; }
-print_success() { echo -e "${GREEN}[+]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[!]${NC} $1"; }
-print_error() { echo -e "${RED}[!]${NC} $1"; }
+# Check if stdout is a terminal
+if [ ! -t 1 ]; then
+    USE_COLOR=false
+    USE_TPUT=false
+fi
 
-# Error handler
+# Try to use tput for colors, fallback to ANSI codes
+if $USE_TPUT && command -v tput >/dev/null 2>&1; then
+    COLUMNS=$(tput cols)
+    RED=$(tput setaf 1)
+    GREEN=$(tput setaf 2)
+    YELLOW=$(tput setaf 3)
+    BLUE=$(tput setaf 4)
+    MAGENTA=$(tput setaf 5)
+    CYAN=$(tput setaf 6)
+    BOLD=$(tput bold)
+    RESET=$(tput sgr0)
+else
+    COLUMNS=80
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    MAGENTA='\033[0;35m'
+    CYAN='\033[0;36m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+fi
+
+# ----------------------------------------------------------------------
+# Helper functions for beautiful output
+# ----------------------------------------------------------------------
+
+# Print a centered text inside a fancy box
+print_banner() {
+    local banner_text=(
+        "██████╗ ██████╗ ██╗  ██╗       █████╗ ██╗"
+        "██╔══██╗██╔══██╗██║  ██║      ██╔══██╗██║"
+        "██████╔╝██████╔╝███████║█████╗███████║██║"
+        "██╔══██╗██╔══██╗██╔══██║╚════╝██╔══██║██║"
+        "██████╔╝██████╔╝██║  ██║      ██║  ██║██║"
+        "╚═════╝ ╚═════╝ ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝"
+        "                                                     "
+        "        Multi‑Agent AI Framework for Bug Bounty        "
+        "              Automated Installation Wizard            "
+    )
+    local line
+    local width=$COLUMNS
+    local padding
+    for line in "${banner_text[@]}"; do
+        padding=$(( (width - ${#line}) / 2 ))
+        printf "%*s" $padding ""
+        echo -e "${CYAN}${BOLD}${line}${RESET}"
+    done
+    echo
+}
+
+# Print a section header with underline
+print_section() {
+    local msg="$1"
+    local width=$COLUMNS
+    local line=$(printf '%*s' "$width" | tr ' ' '=')
+    echo -e "\n${BOLD}${MAGENTA}▶ $msg${RESET}"
+    echo -e "${CYAN}${line}${RESET}"
+}
+
+# Print success message with checkmark
+print_success() {
+    echo -e " ${GREEN}✓${RESET} $1"
+}
+
+# Print info message with arrow
+print_info() {
+    echo -e " ${BLUE}→${RESET} $1"
+}
+
+# Print warning message with exclamation
+print_warning() {
+    echo -e " ${YELLOW}⚠${RESET} $1"
+}
+
+# Print error message and exit
 error_exit() {
-    print_error "$1"
+    echo -e "\n ${RED}✗${RESET} ${BOLD}Error:${RESET} $1"
+    echo -e "   Please check the log file at /tmp/bbh_install.log for details.\n"
     exit 1
 }
 
-# Check if running as root
-if [[ $EUID -ne 0 ]]; then
-    error_exit "This script must be run as root (use sudo)."
-fi
+# ----------------------------------------------------------------------
+# Spinner and progress bar functions
+# ----------------------------------------------------------------------
 
-# Check if we're in the project directory
-if [[ ! -f "config.yaml" ]] || [[ ! -f "requirements.txt" ]]; then
-    error_exit "Please run this script from the BBH-AI project root directory (where config.yaml and requirements.txt are located)."
-fi
-
-print_status "BBH-AI Automated Installer Started"
-print_status "=================================="
-
-# Function to check command availability
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Function to install Go if not present
-install_go() {
-    if ! command_exists go; then
-        print_status "Installing Go programming language..."
-        local GO_VERSION="1.21.5"
-        local GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
-        local GO_URL="https://go.dev/dl/${GO_TAR}"
-        
-        wget -q --show-progress "${GO_URL}" || error_exit "Failed to download Go"
-        rm -rf /usr/local/go
-        tar -C /usr/local -xzf "${GO_TAR}" || error_exit "Failed to extract Go"
-        rm "${GO_TAR}"
-        
-        # Add Go to PATH
-        export PATH=$PATH:/usr/local/go/bin
-        echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
-        echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-        
-        # Verify installation
-        if ! /usr/local/go/bin/go version >/dev/null 2>&1; then
-            error_exit "Go installation failed"
-        fi
-        print_success "Go ${GO_VERSION} installed successfully"
-    else
-        print_success "Go already installed: $(go version)"
-    fi
-}
-
-# Function to update system packages
-update_system() {
-    print_status "Updating system packages..."
-    local APT_CACHE_TIME=86400
-    local LAST_UPDATE=$(stat -c %Y /var/lib/apt/periodic/update-success-stamp 2>/dev/null || echo 0)
-    local NOW=$(date +%s)
+# Show a spinner while a command runs in the background
+# Usage: run_with_spinner "message" command [args...]
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local -a cmd=("$@")
+    local logfile="/tmp/bbh_install.log"
+    local pid
+    local delay=0.1
+    local spinstr='|/-\'
     
-    if (( NOW - LAST_UPDATE > APT_CACHE_TIME )); then
-        apt-get update -yqq || error_exit "Failed to update package lists"
-        apt-get upgrade -yqq || error_exit "Failed to upgrade packages"
-        print_success "System packages updated"
+    printf " ${BLUE}→${RESET} %s  " "$msg"
+    
+    # Run command with output redirected to logfile
+    "${cmd[@]}" >> "$logfile" 2>&1 &
+    pid=$!
+    
+    # Show spinner while waiting
+    while kill -0 $pid 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf "\b%s" "${spinstr:0:1}"
+        spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+    done
+    
+    wait $pid
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+        printf "\b${GREEN}✓${RESET}\n"
     else
-        print_success "Package lists are current (updated within last 24h)"
+        printf "\b${RED}✗${RESET}\n"
+        echo -e "\nLast 20 lines of log:" >> /dev/stderr
+        tail -20 "$logfile" > /dev/stderr
+        error_exit "Command failed: ${cmd[*]}"
     fi
 }
 
-# Function to install system dependencies
+# Show a progress bar for a loop with known total
+# Usage: progress_bar current total
+progress_bar() {
+    local current=$1
+    local total=$2
+    local width=$((COLUMNS - 20))
+    local percentage=$((current * 100 / total))
+    local completed=$((current * width / total))
+    local remaining=$((width - completed))
+    
+    printf "\r ${BLUE}→${RESET} ["
+    printf "%${completed}s" | tr ' ' '='
+    printf "%${remaining}s" | tr ' ' ' '
+    printf "] %3d%% (%d/%d)" "$percentage" "$current" "$total"
+}
+
+# ----------------------------------------------------------------------
+# Prerequisite checks
+# ----------------------------------------------------------------------
+check_prerequisites() {
+    print_section "Prerequisites"
+    
+    # Check root
+    if [[ $EUID -ne 0 ]]; then
+        error_exit "This script must be run as root (use sudo)."
+    fi
+    print_success "Running as root"
+    
+    # Check project directory
+    if [[ ! -f "config.yaml" ]] || [[ ! -f "requirements.txt" ]]; then
+        error_exit "Please run this script from the BBH-AI project root directory (where config.yaml and requirements.txt are located)."
+    fi
+    print_success "Project directory verified"
+    
+    # Internet connectivity check
+    if ! ping -c1 google.com &>/dev/null; then
+        print_warning "No internet connection detected. Some installations may fail."
+    else
+        print_success "Internet connectivity OK"
+    fi
+    
+    # Disk space check (need at least 5GB free)
+    local available=$(df / --output=avail -B1 | tail -1)
+    if [[ $available -lt 5368709120 ]]; then  # 5GB in bytes
+        print_warning "Less than 5GB free disk space. Installation may fail."
+    else
+        print_success "Sufficient disk space"
+    fi
+}
+
+# ----------------------------------------------------------------------
+# Main installation functions (enhanced with UI/UX)
+# ----------------------------------------------------------------------
+
+update_system() {
+    print_section "System Update"
+    run_with_spinner "Updating package lists..." apt-get update -yqq
+    run_with_spinner "Upgrading packages..." apt-get upgrade -yqq
+    print_success "System updated"
+}
+
 install_system_deps() {
-    print_status "Installing system dependencies..."
+    print_section "Installing System Dependencies"
     local packages=(
         git curl wget make gcc libpcap-dev libssl-dev
         python3 python3-pip python3-venv python3-dev
@@ -97,30 +211,53 @@ install_system_deps() {
         build-essential libffi-dev libxml2-dev libxslt-dev
     )
     
-    apt-get install -yqq "${packages[@]}" || error_exit "Failed to install system packages"
+    print_info "Installing ${#packages[@]} packages..."
+    run_with_spinner "Installing packages..." apt-get install -yqq "${packages[@]}"
     
-    # Enable and start services
-    systemctl enable redis-server --now || print_warning "Failed to enable Redis"
-    systemctl enable docker --now || print_warning "Failed to enable Docker"
-    systemctl enable postgresql --now || print_warning "Failed to enable PostgreSQL"
+    # Enable services
+    systemctl enable redis-server --now &>/dev/null || print_warning "Redis enable failed"
+    systemctl enable docker --now &>/dev/null || print_warning "Docker enable failed"
+    systemctl enable postgresql --now &>/dev/null || print_warning "PostgreSQL enable failed"
     
     print_success "System dependencies installed"
 }
 
-# Function to install Go tools
-install_go_tools() {
-    print_status "Installing Go-based security tools..."
+install_go() {
+    print_section "Go Installation"
     
-    # Set Go environment variables
+    if command_exists go; then
+        print_success "Go already installed: $(go version)"
+        return
+    fi
+    
+    local GO_VERSION="1.21.5"
+    local GO_TAR="go${GO_VERSION}.linux-amd64.tar.gz"
+    local GO_URL="https://go.dev/dl/${GO_TAR}"
+    
+    print_info "Downloading Go ${GO_VERSION}..."
+    run_with_spinner "Downloading Go..." wget -q --show-progress "${GO_URL}" -O "/tmp/${GO_TAR}"
+    
+    print_info "Extracting Go..."
+    run_with_spinner "Extracting..." tar -C /usr/local -xzf "/tmp/${GO_TAR}"
+    
+    # Add to PATH
+    export PATH=$PATH:/usr/local/go/bin
+    echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+    echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+    
+    rm "/tmp/${GO_TAR}"
+    print_success "Go ${GO_VERSION} installed"
+}
+
+install_go_tools() {
+    print_section "Installing Go Tools (this may take several minutes)"
+    
     export PATH=$PATH:/usr/local/go/bin:~/go/bin
     export GOPROXY=direct
     export GOSUMDB=off
     export CGO_ENABLED=0
     
-    # Create Go workspace
     mkdir -p ~/go/bin
-    
-    # Clean module cache to avoid conflicts
     go clean -modcache 2>/dev/null || true
     
     local tools=(
@@ -139,165 +276,162 @@ install_go_tools() {
         "github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest"
     )
     
-    local failed_tools=()
+    local total=${#tools[@]}
+    local current=0
+    local failed=()
     
     for tool in "${tools[@]}"; do
-        print_status "Installing ${tool}..."
-        if go install -v "${tool}" 2>&1; then
-            print_success "${tool} installed"
+        current=$((current + 1))
+        progress_bar $current $total
+        printf " %s" "$(basename "${tool%%@*}")"
+        
+        if go install -v "${tool}" >> /tmp/bbh_install.log 2>&1; then
+            :
         else
-            print_warning "Failed to install ${tool}"
-            failed_tools+=("${tool}")
+            failed+=("$tool")
         fi
     done
+    echo  # newline after progress bar
     
-    if [[ ${#failed_tools[@]} -gt 0 ]]; then
-        print_warning "Some Go tools failed to install: ${failed_tools[*]}"
-        print_status "Continuing with remaining installations..."
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        print_warning "${#failed[@]} Go tools failed to install"
     else
         print_success "All Go tools installed successfully"
     fi
 }
 
-# Function to install additional tools
 install_additional_tools() {
-    print_status "Installing additional security tools..."
+    print_section "Installing Additional Tools"
     
     # Findomain
     if ! command_exists findomain; then
-        print_status "Installing findomain..."
-        wget -q https://github.com/Findomain/Findomain/releases/download/9.0.0/findomain-linux.zip || print_warning "Failed to download findomain"
-        if [[ -f findomain-linux.zip ]]; then
-            unzip -q findomain-linux.zip && chmod +x findomain && mv findomain /usr/local/bin/ && rm findomain-linux.zip
-            print_success "findomain installed"
-        fi
+        run_with_spinner "Installing findomain..." bash -c "
+            wget -q https://github.com/Findomain/Findomain/releases/download/9.0.0/findomain-linux.zip -O /tmp/findomain.zip
+            unzip -q /tmp/findomain.zip -d /tmp
+            chmod +x /tmp/findomain
+            mv /tmp/findomain /usr/local/bin/
+            rm /tmp/findomain.zip
+        "
+        print_success "findomain installed"
     else
-        print_success "findomain already installed"
+        print_success "findomain already present"
     fi
     
     # Sublist3r
     if [[ ! -d /opt/Sublist3r ]]; then
-        print_status "Installing Sublist3r..."
-        git clone https://github.com/aboul3la/Sublist3r.git /opt/Sublist3r || print_warning "Failed to clone Sublist3r"
-        if [[ -d /opt/Sublist3r ]]; then
-            cd /opt/Sublist3r && pip3 install -q -r requirements.txt || print_warning "Failed to install Sublist3r dependencies"
-            ln -sf /opt/Sublist3r/sublist3r.py /usr/local/bin/sublist3r || print_warning "Failed to create symlink"
-            print_success "Sublist3r installed"
-        fi
+        run_with_spinner "Installing Sublist3r..." bash -c "
+            git clone --quiet https://github.com/aboul3la/Sublist3r.git /opt/Sublist3r
+            cd /opt/Sublist3r && pip3 install -q -r requirements.txt
+            ln -sf /opt/Sublist3r/sublist3r.py /usr/local/bin/sublist3r
+        "
+        print_success "Sublist3r installed"
     else
-        print_success "Sublist3r already installed"
+        print_success "Sublist3r already present"
     fi
     
     # Waymore
     if [[ ! -d /opt/waymore ]]; then
-        print_status "Installing waymore..."
-        git clone https://github.com/xnl-h4ck3r/waymore.git /opt/waymore || print_warning "Failed to clone waymore"
-        if [[ -d /opt/waymore ]]; then
-            cd /opt/waymore && pip3 install . || print_warning "Failed to install waymore"
-            print_success "waymore installed"
-        fi
+        run_with_spinner "Installing waymore..." bash -c "
+            git clone --quiet https://github.com/xnl-h4ck3r/waymore.git /opt/waymore
+            cd /opt/waymore && pip3 install . > /dev/null
+        "
+        print_success "waymore installed"
     else
-        print_success "waymore already installed"
+        print_success "waymore already present"
     fi
     
     # NucleiFuzzer
     if [[ ! -d /opt/NucleiFuzzer ]]; then
-        print_status "Installing NucleiFuzzer..."
-        git clone https://github.com/0xKayala/NucleiFuzzer.git /opt/NucleiFuzzer || print_warning "Failed to clone NucleiFuzzer"
-        if [[ -d /opt/NucleiFuzzer ]]; then
-            cd /opt/NucleiFuzzer && chmod +x install.sh && ./install.sh || print_warning "Failed to install NucleiFuzzer"
-            print_success "NucleiFuzzer installed"
-        fi
+        run_with_spinner "Installing NucleiFuzzer..." bash -c "
+            git clone --quiet https://github.com/0xKayala/NucleiFuzzer.git /opt/NucleiFuzzer
+            cd /opt/NucleiFuzzer && chmod +x install.sh && ./install.sh > /dev/null
+        "
+        print_success "NucleiFuzzer installed"
     else
-        print_success "NucleiFuzzer already installed"
+        print_success "NucleiFuzzer already present"
     fi
 }
 
-# Function to setup gf patterns
 setup_gf_patterns() {
-    print_status "Setting up gf patterns..."
+    print_section "Configuring gf Patterns"
+    
     mkdir -p ~/.gf
     
-    # Install gf patterns
-    if [[ ! -d /tmp/gf ]]; then
-        git clone https://github.com/tomnomnom/gf.git /tmp/gf || print_warning "Failed to clone gf"
-        if [[ -d /tmp/gf ]]; then
-            cp /tmp/gf/examples/*.json ~/.gf/ 2>/dev/null || true
-        fi
-    fi
+    # Clone patterns repositories
+    run_with_spinner "Downloading gf patterns..." bash -c "
+        git clone --quiet https://github.com/tomnomnom/gf.git /tmp/gf
+        cp /tmp/gf/examples/*.json ~/.gf/ 2>/dev/null || true
+        rm -rf /tmp/gf
+    "
     
-    # Install additional patterns
-    if [[ ! -d /tmp/Gf-Patterns ]]; then
-        git clone https://github.com/1ndianl33t/Gf-Patterns /tmp/Gf-Patterns || print_warning "Failed to clone Gf-Patterns"
-        if [[ -d /tmp/Gf-Patterns ]]; then
-            cp /tmp/Gf-Patterns/*.json ~/.gf/ 2>/dev/null || true
-        fi
-    fi
+    run_with_spinner "Downloading additional patterns..." bash -c "
+        git clone --quiet https://github.com/1ndianl33t/Gf-Patterns /tmp/Gf-Patterns
+        cp /tmp/Gf-Patterns/*.json ~/.gf/ 2>/dev/null || true
+        rm -rf /tmp/Gf-Patterns
+    "
     
-    # Cleanup
-    rm -rf /tmp/gf /tmp/Gf-Patterns
     print_success "gf patterns configured"
 }
 
-# Function to build Docker sandbox
 build_docker_sandbox() {
-    if [[ -f sandbox/Dockerfile.sandbox ]]; then
-        print_status "Building BBH-AI sandbox Docker image..."
-        
-        # Configure Docker DNS if needed
-        if ! docker pull python:3.11-slim --quiet >/dev/null 2>&1; then
-            print_status "Configuring Docker DNS fallback..."
-            mkdir -p /etc/docker
-            cat > /etc/docker/daemon.json << DOCKER_EOF
+    if [[ ! -f sandbox/Dockerfile.sandbox ]]; then
+        print_warning "sandbox/Dockerfile.sandbox not found - skipping Docker build"
+        return
+    fi
+    
+    print_section "Building Docker Sandbox"
+    
+    # Ensure Docker is running and configured
+    run_with_spinner "Configuring Docker DNS..." bash -c "
+        mkdir -p /etc/docker
+        cat > /etc/docker/daemon.json << DOCKER_EOF
 {
-  "dns": ["8.8.8.8", "1.1.1.1"],
-  "insecure-registries": []
+  \"dns\": [\"8.8.8.8\", \"1.1.1.1\"],
+  \"insecure-registries\": []
 }
 DOCKER_EOF
-            systemctl restart docker || print_warning "Failed to restart Docker"
-            sleep 5
-        fi
-        
-        # Build the image
-        if docker build --network=host -t bbh-ai-unified -f sandbox/Dockerfile.sandbox .; then
-            print_success "Docker sandbox image built successfully"
-        else
-            print_warning "Docker build failed - you may need to run 'python rebuild_docker.py' manually"
-        fi
+        systemctl restart docker
+        sleep 5
+    "
+    
+    # Pull base image
+    run_with_spinner "Pulling base image..." docker pull python:3.11-slim --quiet
+    
+    # Build image
+    print_info "Building image bbh-ai-unified (this may take a while)..."
+    if docker build --network=host -t bbh-ai-unified -f sandbox/Dockerfile.sandbox . >> /tmp/bbh_install.log 2>&1; then
+        print_success "Docker sandbox image built successfully"
     else
-        print_warning "sandbox/Dockerfile.sandbox not found - skipping Docker build"
+        print_warning "Docker build failed - you may need to run 'python rebuild_docker.py' manually"
     fi
 }
 
-# Function to setup Python environment
 setup_python_env() {
-    print_status "Setting up Python virtual environment..."
+    print_section "Python Environment Setup"
     
-    # Remove existing venv if it exists
-    rm -rf venv
+    # Remove existing venv if present
+    if [[ -d venv ]]; then
+        rm -rf venv
+        print_info "Removed old virtual environment"
+    fi
     
-    # Create new virtual environment
-    python3 -m venv venv || error_exit "Failed to create virtual environment"
+    run_with_spinner "Creating virtual environment..." python3 -m venv venv
     
-    # Activate and upgrade pip
     source venv/bin/activate
-    pip install --upgrade pip || print_warning "Failed to upgrade pip"
+    run_with_spinner "Upgrading pip..." pip install --upgrade pip
     
-    # Install Python dependencies
     if [[ -f requirements.txt ]]; then
-        pip install -r requirements.txt || error_exit "Failed to install Python dependencies"
+        run_with_spinner "Installing Python packages..." pip install -r requirements.txt
         print_success "Python dependencies installed"
     else
         error_exit "requirements.txt not found"
     fi
     
-    # Deactivate venv
     deactivate
 }
 
-# Function to create startup script
 create_startup_script() {
-    print_status "Creating startup convenience script..."
+    print_section "Creating Startup Script"
     
     cat > start_bbh_ai.sh << 'STARTUP_EOF'
 #!/bin/bash
@@ -306,75 +440,87 @@ create_startup_script() {
 
 set -e
 
-echo "Starting BBH-AI..."
+echo -e "\033[1;36m▶ Starting BBH-AI...\033[0m"
 
-# Check if virtual environment exists
+# Check virtual environment
 if [[ ! -d "venv" ]]; then
-    echo "Virtual environment not found. Please run: sudo ./installer.sh"
+    echo -e "\033[1;31m✗ Virtual environment not found. Please run: sudo ./installer.sh\033[0m"
     exit 1
 fi
 
-# Activate virtual environment
+# Activate environment
 source venv/bin/activate
-
-# Set Python path
 export PYTHONPATH=$PWD:$PYTHONPATH
 
-# Start Redis if not running
+# Start services
 if ! pgrep redis-server > /dev/null; then
-    echo "Starting Redis..."
+    echo -e "\033[1;33m⚠ Starting Redis...\033[0m"
     sudo systemctl start redis-server
 fi
 
-# Start PostgreSQL if not running
 if ! pgrep postgres > /dev/null; then
-    echo "Starting PostgreSQL..."
+    echo -e "\033[1;33m⚠ Starting PostgreSQL...\033[0m"
     sudo systemctl start postgresql
 fi
 
-echo "BBH-AI environment ready!"
-echo "Run your commands with the virtual environment activated."
-echo "Example: python main.py --help"
+echo -e "\033[1;32m✓ BBH-AI environment ready!\033[0m"
+echo -e "Run your commands with the virtual environment activated."
+echo -e "Example: python main.py --help"
 STARTUP_EOF
     
     chmod +x start_bbh_ai.sh
-    print_success "Startup script created: ./start_bbh_ai.sh"
+    print_success "Created start_bbh_ai.sh"
 }
 
-# Function to verify installation
 verify_installation() {
-    print_status "Verifying installation..."
+    print_section "Verification"
     
-    local missing_tools=()
+    local missing=()
     
-    # Check critical tools
-    local critical_tools=(go python3 pip3 docker redis-cli)
-    for tool in "${critical_tools[@]}"; do
+    # Check critical system tools
+    for tool in go python3 pip3 docker redis-cli; do
         if ! command_exists "$tool"; then
-            missing_tools+=("$tool")
+            missing+=("$tool")
         fi
     done
     
-    # Check Go tools
-    local go_tools=(nuclei subfinder httpx katana dnsx)
-    for tool in "${go_tools[@]}"; do
+    # Check common Go tools
+    for tool in nuclei subfinder httpx katana dnsx; do
         if ! command_exists "$tool"; then
-            missing_tools+=("$tool")
+            missing+=("$tool")
         fi
     done
     
-    if [[ ${#missing_tools[@]} -gt 0 ]]; then
-        print_warning "Some tools may not be available in PATH: ${missing_tools[*]}"
-        print_status "You may need to restart your shell or run: source ~/.bashrc"
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        print_warning "Some tools are missing: ${missing[*]}"
+        print_info "You may need to restart your shell or run: source ~/.bashrc"
     else
         print_success "All critical tools verified"
     fi
 }
 
-# Main installation process
+# ----------------------------------------------------------------------
+# Main orchestration
+# ----------------------------------------------------------------------
 main() {
-    print_status "Starting comprehensive BBH-AI installation..."
+    # Clear screen for better presentation
+    clear
     
+    # Show banner
+    print_banner
+    
+    # Start timer
+    local start_time=$SECONDS
+    
+    # Trap Ctrl+C
+    trap 'echo -e "\n\n${RED}Installation interrupted by user${RESET}"; exit 1' INT
+    
+    # Create log file
+    touch /tmp/bbh_install.log
+    echo "BBH-AI installation started at $(date)" > /tmp/bbh_install.log
+    
+    # Run steps
+    check_prerequisites
     update_system
     install_system_deps
     install_go
@@ -386,16 +532,30 @@ main() {
     create_startup_script
     verify_installation
     
-    print_success "BBH-AI installation completed successfully!"
+    local elapsed=$((SECONDS - start_time))
+    local minutes=$((elapsed / 60))
+    local seconds=$((elapsed % 60))
+    
+    # Final summary
     echo
-    print_status "Next steps:"
-    echo "  1. Restart your shell or run: source ~/.bashrc"
-    echo "  2. Activate environment: source venv/bin/activate"
-    echo "  3. Quick start: ./start_bbh_ai.sh"
-    echo "  4. Run BBH-AI: python main.py --help"
+    print_section "Installation Complete"
+    echo -e " ${GREEN}✓${RESET} BBH-AI has been successfully installed!"
+    echo -e " ${GREEN}✓${RESET} Total time: ${minutes}m ${seconds}s"
     echo
-    print_success "Happy hacking with BBH-AI! ���"
+    echo -e " ${BLUE}→${RESET} Next steps:"
+    echo -e "  1. Restart your shell or run: ${BOLD}source ~/.bashrc${RESET}"
+    echo -e "  2. Activate environment: ${BOLD}source venv/bin/activate${RESET}"
+    echo -e "  3. Quick start: ${BOLD}./start_bbh_ai.sh${RESET}"
+    echo -e "  4. Run BBH-AI: ${BOLD}python main.py --help${RESET}"
+    echo
+    echo -e " ${MAGENTA}Happy hacking with BBH-AI!${RESET}"
+    echo
 }
 
-# Run main function
+# Helper: command existence check
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Run main
 main "$@"
