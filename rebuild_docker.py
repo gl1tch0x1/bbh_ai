@@ -11,6 +11,11 @@ import time
 import socket
 from pathlib import Path
 
+# Configuration flag to skip network diagnostics for offline environments
+# Set to True if you're in an air-gapped environment or have connectivity issues
+# You can also set this via environment variable: export SKIP_BBH_NETWORK_DIAGNOSTICS=true
+SKIP_NETWORK_DIAGNOSTICS = os.environ.get('SKIP_BBH_NETWORK_DIAGNOSTICS', 'false').lower() == 'true'
+
 
 def diagnose_network():
     """Run network diagnostics before attempting build."""
@@ -101,6 +106,9 @@ def build_docker_image_with_retry(dockerfile_path: Path, image_name: str, max_re
     """Build Docker image with retry logic and exponential backoff."""
     print(f"\n🏗️  Building Docker image '{image_name}' from {dockerfile_path}...")
     
+    # Get the project root directory (parent of sandbox directory)
+    project_root = dockerfile_path.parent.parent
+    
     for attempt in range(1, max_retries + 1):
         print(f"\n📦 Build attempt {attempt}/{max_retries}...")
         
@@ -115,7 +123,7 @@ def build_docker_image_with_retry(dockerfile_path: Path, image_name: str, max_re
             
             result = subprocess.run(
                 cmd,
-                cwd=dockerfile_path.parent,
+                cwd=project_root,  # Run from project root to ensure correct context
                 capture_output=False,  # Show live output for debugging
                 text=True,
                 timeout=3600  # 1 hour timeout
@@ -132,6 +140,14 @@ def build_docker_image_with_retry(dockerfile_path: Path, image_name: str, max_re
                     time.sleep(wait_time)
                 else:
                     print(f"\n❌ Build failed after {max_retries} attempts")
+                    print("\n🔧 Troubleshooting tips:")
+                    print("   1. Check network connectivity: ping 8.8.8.8")
+                    print("   2. Check DNS resolution: nslookup registry-1.docker.io")
+                    print("   3. Try building with network diagnostics disabled:")
+                    print("      Edit rebuild_docker.py and set SKIP_NETWORK_DIAGNOSTICS = True")
+                    print("   4. Pre-download base images on a machine with better connectivity:")
+                    print("      docker pull python:3.11-slim")
+                    print("   5. Use a Docker registry mirror if behind a firewall")
                     return False
                     
         except subprocess.TimeoutExpired:
@@ -164,30 +180,33 @@ def main():
     print("  BBH-AI Docker Image Builder v2.0")
     print("=" * 60)
 
-    # Run diagnostics
-    if not diagnose_docker():
-        print("\n❌ Docker daemon is not available")
-        sys.exit(1)
-
-    if not diagnose_network():
-        print("\n⚠️  Network connectivity issues detected")
-        print("\nOptions:")
-        print("  1. Fix your network and retry")
-        print("  2. Use a local Docker mirror (configure docker daemon)")
-        print("  3. Try building on a different network")
-        response = input("\nContinue anyway? (y/N): ").strip().lower()
-        if response != 'y':
+    # Run diagnostics (unless skipped)
+    if not SKIP_NETWORK_DIAGNOSTICS:
+        if not diagnose_docker():
+            print("\n❌ Docker daemon is not available")
             sys.exit(1)
 
-    if not test_docker_hub():
-        print("\n⚠️  Docker Hub is not accessible")
-        print("\nOptions:")
-        print("  1. Fix network connectivity")
-        print("  2. Configure Docker to use a local mirror")
-        print("  3. Pre-pull the base image on a machine with internet")
-        response = input("\nContinue anyway? (y/N): ").strip().lower()
-        if response != 'y':
-            sys.exit(1)
+        if not diagnose_network():
+            print("\n⚠️  Network connectivity issues detected")
+            print("\nOptions:")
+            print("  1. Fix your network and retry")
+            print("  2. Use a local Docker mirror (configure docker daemon)")
+            print("  3. Try building on a different network")
+            response = input("\nContinue anyway? (y/N): ").strip().lower()
+            if response != 'y':
+                sys.exit(1)
+
+        if not test_docker_hub():
+            print("\n⚠️  Docker Hub is not accessible")
+            print("\nOptions:")
+            print("  1. Fix network connectivity")
+            print("  2. Configure Docker to use a local mirror")
+            print("  3. Pre-pull the base image on a machine with internet")
+            response = input("\nContinue anyway? (y/N): ").strip().lower()
+            if response != 'y':
+                sys.exit(1)
+    else:
+        print("\n⏭️  Skipping network diagnostics (SKIP_NETWORK_DIAGNOSTICS=True)")
 
     # Attempt build with retry logic
     success = build_docker_image_with_retry(dockerfile_path, image_name, max_retries=3)

@@ -252,52 +252,89 @@ install_go() {
 install_go_tools() {
     print_section "Installing Go Tools (this may take several minutes)"
     
-    export PATH=$PATH:/usr/local/go/bin:~/go/bin
-    export GOPROXY=direct
-    export GOSUMDB=off
+    # Set Go environment variables
+    export PATH="${PATH}:/usr/local/go/bin:${HOME}/go/bin"
+    export GOPROXY="https://proxy.golang.org,direct"
+    export GOSUMDB="off"
     export CGO_ENABLED=0
+    export GO111MODULE=on
     
-    mkdir -p ~/go/bin
+    # Create Go bin directory if it doesn't exist
+    mkdir -p "${HOME}/go/bin"
+    
+    # Clean Go module cache
     go clean -modcache 2>/dev/null || true
     
+    # Define Go tools with pinned versions for stability
     local tools=(
-        "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
-        "github.com/projectdiscovery/httpx/cmd/httpx@latest"
-        "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
-        "github.com/projectdiscovery/katana/cmd/katana@latest"
-        "github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
-        "github.com/projectdiscovery/tlsx/cmd/tlsx@latest"
+        "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.6.3"
+        "github.com/projectdiscovery/httpx/cmd/httpx@v1.3.8"
+        "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.0.0"
+        "github.com/projectdiscovery/katana/cmd/katana@v0.0.13"
+        "github.com/projectdiscovery/dnsx/cmd/dnsx@v1.1.6"
+        "github.com/projectdiscovery/tlsx/cmd/tlsx@v1.1.6"
         "github.com/tomnomnom/assetfinder@latest"
         "github.com/tomnomnom/gf@latest"
         "github.com/lc/gau/v2/cmd/gau@latest"
         "github.com/hahwul/dalfox/v2@latest"
         "github.com/jaeles-project/gospider@latest"
         "github.com/ffuf/ffuf@latest"
-        "github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest"
+        "github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.1.4"
     )
     
     local total=${#tools[@]}
     local current=0
     local failed=()
+    local success=0
     
     for tool in "${tools[@]}"; do
         current=$((current + 1))
-        progress_bar $current $total
-        printf " %s" "$(basename "${tool%%@*}")"
+        progress_bar "$current" "$total"
         
-        if go install -v "${tool}" >> /tmp/bbh_install.log 2>&1; then
-            :
-        else
-            failed+=("$tool")
+        # Extract tool name for display
+        local tool_name=$(echo "${tool%%@*}" | rev | cut -d/ -f1 | rev)
+        printf " ${CYAN}%s${RESET}" "$tool_name"
+        
+        # Try to install with retry logic
+        local attempt=1
+        local max_attempts=3
+        local install_success=false
+        
+        while [ $attempt -le $max_attempts ]; do
+            if timeout 300 go install -v "${tool}" >> /tmp/bbh_install.log 2>&1; then
+                install_success=true
+                success=$((success + 1))
+                break
+            else
+                if [ $attempt -lt $max_attempts ]; then
+                    local wait_time=$((attempt * 10))
+                    sleep "$wait_time"
+                fi
+                attempt=$((attempt + 1))
+            fi
+        done
+        
+        if ! $install_success; then
+            failed+=("$tool_name")
         fi
     done
+    
     echo  # newline after progress bar
     
+    # Print summary
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${RESET}"
+    echo -e "${CYAN}Go Tool Installation Summary:${RESET}"
+    echo -e "${GREEN}  ✓ Installed: $success/$total${RESET}"
+    echo -e "${RED}  ✗ Failed: ${#failed[@]}/$total${RESET}"
+    
     if [[ ${#failed[@]} -gt 0 ]]; then
-        print_warning "${#failed[@]} Go tools failed to install"
+        echo -e "${YELLOW}Failed tools: ${failed[*]}${RESET}"
+        print_warning "Some Go tools failed to install. Build will continue with available tools."
     else
         print_success "All Go tools installed successfully"
     fi
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${RESET}"
 }
 
 install_additional_tools() {
