@@ -3,6 +3,8 @@ import logging
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, List
+import asyncio
+import traceback
 
 from agent_controller import AgentController
 from celery_app import celery
@@ -77,22 +79,53 @@ class Orchestrator:
         """
         Execute the full autonomous scan workflow.
         Includes TCI scoring, validation, and PoC generation.
+        
+        Args:
+            target: The target domain or URL to scan
+            on_finding: Callback function to handle findings in real-time
+            
+        Returns:
+            Scan result object containing report paths and exit code
+            
+        Raises:
+            ValueError: If target is invalid
+            RuntimeError: If scan fails to complete
         """
+        if not target or not isinstance(target, str):
+            raise ValueError("Target must be a non-empty string")
+            
         self.state["target"] = target
         self.state["status"] = "running"
         self.store.save("state", self.state)
         self.logger.info(f"Starting autonomous scan against target: {target}")
 
-        scan_mode = self.config.get('scan', {}).get('mode', 'quick')
-        if scan_mode == 'distributed':
-            return await self._run_distributed(target)
-        return await self._run_local(target, on_finding=on_finding)
+        try:
+            scan_mode = self.config.get('scan', {}).get('mode', 'quick')
+            if scan_mode == 'distributed':
+                return await self._run_distributed(target)
+            return await self._run_local(target, on_finding=on_finding)
+        except Exception as e:
+            self.logger.error(f"Scan failed with error: {str(e)}")
+            self.logger.debug(f"Traceback: {traceback.format_exc()}")
+            self.state["status"] = "failed"
+            self.store.save("state", self.state)
+            raise RuntimeError(f"Scan failed: {str(e)}") from e
 
     async def _run_local(
         self,
         target: str,
         on_finding: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Any:
+        """
+        Execute the local scan workflow through all phases.
+        
+        Args:
+            target: The target domain or URL to scan
+            on_finding: Callback function to handle findings in real-time
+            
+        Returns:
+            MockResult object containing report paths and exit code
+        """
         start_phase = self.config.get('scan', {}).get('start_phase', 'A')
         phases = [
             ('A', "discovery",  self._phase_a_discovery),
@@ -105,34 +138,43 @@ class Orchestrator:
 
         # Skip phases before start_phase
         execute_phases = [p for p in phases if p[0] >= start_phase]
-        for name, key, func in execute_phases:
-            self.logger.info(f"=== Starting Phase {name}: {key.upper()} ===")
-            try:
-                # Wrap sync phase functions in to_thread since Orchestrator is now async
-                import asyncio
-                await asyncio.to_thread(func, self.state)
+        
+        try:
+            for name, key, func in execute_phases:
+                self.logger.info(f"=== Starting Phase {name}: {key.upper()} ===")
+                try:
+                    # Wrap sync phase functions in to_thread since Orchestrator is now async
+                    await asyncio.to_thread(func, self.state)
 
-                if on_finding and key in ("vuln_scan", "validation"):
-                    latest: List[Dict[str, Any]] = self.state.get("findings", [])
-                    for f in latest:
-                        on_finding(f)
+                    if on_finding and key in ("vuln_scan", "validation"):
+                        latest: List[Dict[str, Any]] = self.state.get("findings", [])
+                        for f in latest:
+                            on_finding(f)
 
-                self.state["phases_completed"].append(name)
-                self.store.save("state", self.state)
-
-            except Exception as exc:
-                self.logger.error(
-                    f"Phase {name} failed: {exc}. Attempting Auto-Heal."
-                )
-                healed = await self.auto_healer.heal(exc, self.state)
-                if not healed:
-                    self.logger.error(f"Auto-Heal failed for Phase {name}.")
-                    self.state["status"] = "failed"
+                    self.state["phases_completed"].append(name)
                     self.store.save("state", self.state)
-                    break
 
-        await self.sandbox.close()
-        self.telemetry.save()
+                except Exception as exc:
+                    self.logger.error(
+                        f"Phase {name} failed: {exc}. Attempting Auto-Heal."
+                    )
+                    self.logger.debug(f"Traceback: {traceback.format_exc()}")
+                    healed = await self.auto_healer.heal(exc, self.state)
+                    if not healed:
+                        self.logger.error(f"Auto-Heal failed for Phase {name}.")
+                        self.state["status"] = "failed"
+                        self.store.save("state", self.state)
+                        # Continue with remaining phases unless critical failure
+                        continue
+                        
+        finally:
+            # Ensure cleanup happens even if phases fail
+            try:
+                await self.sandbox.close()
+                self.telemetry.save()
+            except Exception as e:
+                self.logger.error(f"Error during cleanup: {e}")
+                
         self.logger.info("Scan completed natively.")
 
         class MockResult:
@@ -146,56 +188,102 @@ class Orchestrator:
 
     # ── Phase Implementations ─────────────────────────────────────────────────
     def _phase_a_discovery(self, context: Dict[str, Any]) -> None:
-        if "discovery" not in self.config.get("scan", {}).get("phases", []):
-            self.logger.info("Phase A (Discovery) disabled in config.")
-            return
+        """
+        Execute Phase A: Asset Discovery.
+        
+        Args:
+            context: The scan context dictionary to update with findings
+        """
+        try:
+            if "discovery" not in self.config.get("scan", {}).get("phases", []):
+                self.logger.info("Phase A (Discovery) disabled in config.")
+                return
 
-        # 1. External OSINT Tools
-        subfinder = self.tool_registry.get_tool("subfinder")
-        subs: List[str] = []
-        if subfinder:
-            import asyncio
-            subs = asyncio.run(subfinder.run(target=context["target"]))
-            self.logger.info(f"Subfinder found {len(subs)} subdomains")
+            # 1. External OSINT Tools
+            subfinder = self.tool_registry.get_tool("subfinder")
+            subs: List[str] = []
+            if subfinder:
+                try:
+                    import asyncio
+                    subs_result = asyncio.run(subfinder.run(target=context["target"]))
+                    if isinstance(subs_result, dict) and "subdomains" in subs_result:
+                        subs = subs_result["subdomains"]
+                    elif isinstance(subs_result, list):
+                        subs = subs_result
+                    self.logger.info(f"Subfinder found {len(subs)} subdomains")
+                except Exception as e:
+                    self.logger.warning(f"Subfinder failed: {e}")
+                    subs = []
 
-        # 2. Agent Discovery
-        agent_ctx = {
-            "target": context["target"],
-            "tool_subdomains": subs,
-            "tci_score": context.get("tci", {}).get("score", 0),
-        }
-        res = self.agent_controller.run_phase("discovery", agent_ctx)
+            # 2. Agent Discovery
+            agent_ctx = {
+                "target": context["target"],
+                "tool_subdomains": subs,
+                "tci_score": context.get("tci", {}).get("score", 0),
+            }
+            
+            try:
+                res = self.agent_controller.run_phase("discovery", agent_ctx)
+            except Exception as e:
+                self.logger.error(f"Agent discovery failed: {e}")
+                res = {}
 
-        merged_subs = list(set(subs + res.get("subdomains", [])))
-        context["subdomains"] = merged_subs
-        context["ips"] = res.get("ips", [])
+            merged_subs = list(set(subs + res.get("subdomains", [])))
+            context["subdomains"] = merged_subs
+            context["ips"] = res.get("ips", [])
 
-        # Calculate initial TCI based on discovered breadth
-        if merged_subs:
-            tci = self.tci_calculator.analyze(context["target"], endpoints=merged_subs)
-            context["tci"] = tci
-            self.logger.info(
-                f"[TCI] Scored {tci['score']}/100 ({tci['band']}) after Phase A"
-            )
+            # Calculate initial TCI based on discovered breadth
+            if merged_subs:
+                try:
+                    tci = self.tci_calculator.analyze(context["target"], endpoints=merged_subs)
+                    context["tci"] = tci
+                    self.logger.info(
+                        f"[TCI] Scored {tci['score']}/100 ({tci['band']}) after Phase A"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"TCI calculation failed: {e}")
+                    
+        except Exception as e:
+            self.logger.error(f"Phase A failed with unexpected error: {e}")
+            raise
 
     def _phase_b_enrichment(self, context: Dict[str, Any]) -> None:
-        agent_ctx = {
-            "subdomains": context.get("subdomains", []),
-            "tci_score":  context.get("tci", {}).get("score", 0),
-            "tci_band":   context.get("tci", {}).get("band", "UNKNOWN"),
-        }
-        res = self.agent_controller.run_phase("enrichment", agent_ctx)
-        context["live_hosts"] = res.get("live_hosts", [])
-        context["port_data"] = res.get("port_data", {})
+        """
+        Execute Phase B: Host Enrichment.
+        
+        Args:
+            context: The scan context dictionary to update with findings
+        """
+        try:
+            agent_ctx = {
+                "subdomains": context.get("subdomains", []),
+                "tci_score":  context.get("tci", {}).get("score", 0),
+                "tci_band":   context.get("tci", {}).get("band", "UNKNOWN"),
+            }
+            
+            try:
+                res = self.agent_controller.run_phase("enrichment", agent_ctx)
+            except Exception as e:
+                self.logger.error(f"Agent enrichment failed: {e}")
+                res = {}
+                
+            context["live_hosts"] = res.get("live_hosts", [])
+            context["port_data"] = res.get("port_data", {})
 
-        # Re-calc TCI with live hosts
-        if context["live_hosts"]:
-            tci = self.tci_calculator.analyze(
-                context["target"],
-                live_hosts=context["live_hosts"],
-                endpoints=context.get("subdomains", []),
-            )
-            context["tci"] = tci
+            # Re-calc TCI with live hosts
+            if context["live_hosts"]:
+                try:
+                    tci = self.tci_calculator.analyze(
+                        context["target"],
+                        live_hosts=context["live_hosts"],
+                        endpoints=context.get("subdomains", []),
+                    )
+                    context["tci"] = tci
+                except Exception as e:
+                    self.logger.warning(f"TCI calculation failed: {e}")
+        except Exception as e:
+            self.logger.error(f"Phase B failed with unexpected error: {e}")
+            raise
 
     def _phase_c_webrecon(self, context: Dict[str, Any]) -> None:
         agent_ctx = {
