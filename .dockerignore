@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Development
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.venv
+venv
+env
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Build artifacts
+build/
+dist/
+*.egg-info
+.eggs
+
+# Test coverage
+.coverage
+htmlcov
+.tox
+
+# Docker
+Dockerfile*
+docker-compose.yml
+.dockerignore
+
+# Documentation
+*.md
+docs/
+
+# CI
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# Misc
+*.log
+.DS_Store
+*.tmp
+tests/

@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+# Increase pip timeout and add retries for network resilience
+ENV PIP_DEFAULT_TIMEOUT=100 \
+    PIP_RETRIES=5 \
+    PIP_CONNECT_TIMEOUT=60
+
 # Install core dependencies and tool backends
 RUN apt update && apt install -y --no-install-recommends \
     curl wget git nmap dnsutils whois procps \
@@ -16,7 +21,9 @@ ENV PATH=$PATH:/usr/local/go/bin:/root/go/bin
 # Using pinned versions avoids @latest re-verification which can timeout
 # GOSUMDB=off bypasses checksum verification for network resilience
 # Each tool must have its own go install command (Go limitation with mixed versions)
-ENV GOPROXY=direct GOSUMDB=off CGO_ENABLED=0
+# Extended timeouts for network resilience
+ENV GOPROXY=direct GOSUMDB=off CGO_ENABLED=0 \
+    HTTP_TIMEOUT=300 HTTPS_TIMEOUT=300
 RUN set -e; \
     for tool in \
         "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.0.0" \
