@@ -1,3 +1,7 @@
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-blue)](#)
+
 # 🤖 BBH-AI: Autonomous AI Security Testing Platform
 
 BBH-AI is an **enterprise-grade autonomous security testing platform** that combines AI reasoning with offensive security tools to autonomously discover, validate, and exploit vulnerabilities. Using Swarm Consensus Intelligence and Chain-of-Thought reasoning, BBH-AI operates like an expert penetration tester—but faster, deeper, and 24/7.
@@ -64,36 +68,20 @@ BBH-AI is an **enterprise-grade autonomous security testing platform** that comb
 
 BBH-AI executes a rigorous 5-phase workflow enhanced by AI interpretation at every step:
 
-```
-PHASE A: DISCOVERY
-↓ (Passive OSINT + Subdomain Enum)
-├── Tools: subfinder, gau, whois
-├── Output: Subdomains, IPs, DNS Records
-↓
-PHASE B: ENRICHMENT
-↓ (Host Liveness + Port Scanning)
-├── Tools: dnsx, naabu, httpx
-├── Output: Live Hosts, Ports, Services
-↓
-PHASE C: WEB RECON
-↓ (JS Audit + Endpoint Discovery)
-├── Tools: katana, ffuf, jsluice
-├── Output: Endpoints, APIs, Tech Stack
-↓
-[🤖 AI AGENT CONTROLLER]
-├── Strategist: Attack Planning
-├── Architect: Payload Generation
-├── Interpreter: Vulnerability Analysis
-↓
-PHASE D: EXPLOITATION
-↓ (Vuln Testing + PoC Validation)
-├── Tools: nuclei, sqlmap, ghauri
-├── Output: Validated Vulnerabilities
-↓
-PHASE E: REPORTING
-↓ (CVSS Scoring + Remediation)
-├── Output: Reports + CVSS Scores
-└── Formats: Markdown, JSON, HTML
+```mermaid
+graph TD
+    A["<b>PHASE A: DISCOVERY</b><br/>Passive OSINT + Subdomain Enum<br/>---<br/>Tools: subfinder, gau, whois<br/>Output: Subdomains, IPs, DNS Records"] --> B["<b>PHASE B: ENRICHMENT</b><br/>Host Liveness + Port Scanning<br/>---<br/>Tools: dnsx, naabu, httpx<br/>Output: Live Hosts, Ports, Services"]
+    B --> C["<b>PHASE C: WEB RECON</b><br/>JS Audit + Endpoint Discovery<br/>---<br/>Tools: katana, ffuf, jsluice<br/>Output: Endpoints, APIs, Tech Stack"]
+    C --> D["<b>🤖 AI AGENT CONTROLLER</b><br/>Strategist | Architect | Interpreter"]
+    D --> E["<b>PHASE D: EXPLOITATION</b><br/>Vuln Testing + PoC Validation<br/>---<br/>Tools: nuclei, sqlmap, ghauri<br/>Output: Validated Vulnerabilities"]
+    E --> F["<b>PHASE E: REPORTING</b><br/>CVSS Scoring + Remediation<br/>---<br/>Output: Reports + CVSS Scores<br/>Formats: Markdown, JSON, HTML"]
+    
+    style A fill:#e1f5ff,stroke:#01579b,color:#000
+    style B fill:#e1f5ff,stroke:#01579b,color:#000
+    style C fill:#e1f5ff,stroke:#01579b,color:#000
+    style D fill:#fff3e0,stroke:#e65100,color:#000,stroke-width:3px
+    style E fill:#f3e5f5,stroke:#4a148c,color:#000
+    style F fill:#e8f5e9,stroke:#1b5e20,color:#000
 ```
 
 ### Phase Execution Details
@@ -112,40 +100,26 @@ PHASE E: REPORTING
 
 BBH-AI uses a trio of specialized AI agents that work collaboratively:
 
-```
-┌─────────────────────────────────────┐
-│  🎯 Agent Controller (Master)       │
-│     (Orchestrates all agents)       │
-└────────────┬────────────────────────┘
-             │
-    ┌────────┼────────┐
-    │        │        │
-    ▼        ▼        ▼
-┌────────┐ ┌────────┐ ┌────────┐
-│🕵️Attack│ │🛠️Payload│ │🔬Vuln  │
-│Strategist│ │Architect│ │Interp  │
-│─────────│ │─────────│ │────────│
-│- Analyze │ │- Create │ │- Explain
-│- Map     │ │- Generate │ │- Score
-│- Priorit │ │- Validate │ │- Suggest
-└────────┘ └────────┘ └────────┘
-    │        │        │
-    └────────┼────────┘
-             │
-    ┌────────▼──────────┐
-    │🧠 Consensus Logic │
-    │─────────────────  │
-    │2/3 = CONFIRM     │
-    │3/3 = HIGH CONF   │
-    │Disagree = Review │
-    └───────┬──────────┘
-            │
-    ┌───────▼──────────────┐
-    │💾 Memory Graph      │
-    │   (O(1) Lookup)     │
-    │   - Finding Dedup   │
-    │   - Attack History  │
-    └────────────────────┘
+```mermaid
+graph TD
+    Master["<b>🎯 Agent Controller</b><br/>Master Orchestrator<br/>(Coordinates all agents)"]
+    
+    Master --> Strategist["<b>🕵️ Strategist</b><br/>Attack Planning<br/>---<br/>• Analyze targets<br/>• Map attack surface<br/>• Prioritize vectors"]
+    Master --> Architect["<b>🛠️ Architect</b><br/>Payload Generation<br/>---<br/>• Create exploits<br/>• Generate payloads<br/>• Validate PoCs"]
+    Master --> Interpreter["<b>🔬 Interpreter</b><br/>Vulnerability Analysis<br/>---<br/>• Explain findings<br/>• Calculate CVSS<br/>• Suggest remediation"]
+    
+    Strategist --> Consensus["<b>🧠 Consensus Logic</b><br/>Voting System<br/>---<br/>2/3 agents = CONFIRM<br/>3/3 agents = HIGH CONFIDENCE<br/>Disagreement = Review Required"]
+    Architect --> Consensus
+    Interpreter --> Consensus
+    
+    Consensus --> Memory["<b>💾 Memory Graph</b><br/>Knowledge Base<br/>---<br/>O(1) Lookup Performance<br/>Finding Deduplication<br/>Attack History Tracking"]
+    
+    style Master fill:#fff3e0,stroke:#e65100,color:#000,stroke-width:3px
+    style Strategist fill:#e1f5ff,stroke:#01579b,color:#000
+    style Architect fill:#e1f5ff,stroke:#01579b,color:#000
+    style Interpreter fill:#e1f5ff,stroke:#01579b,color:#000
+    style Consensus fill:#f3e5f5,stroke:#4a148c,color:#000
+    style Memory fill:#e8f5e9,stroke:#1b5e20,color:#000
 ```
 
 ### Agent Specializations
